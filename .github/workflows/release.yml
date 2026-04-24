@@ -6,6 +6,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-artifacts:
     name: Build ${{ matrix.name }}
@@ -15,12 +18,14 @@ jobs:
         include:
           - name: Windows
             os: windows-latest
+            bundles: msi,nsis
             artifact-pattern: |
               src-tauri/target/release/bundle/msi/*.msi
               src-tauri/target/release/bundle/nsis/*.exe
 
           - name: Linux (AppImage)
             os: ubuntu-latest
+            bundles: appimage
             artifact-pattern: |
               src-tauri/target/release/bundle/appimage/*.AppImage
 
@@ -60,13 +65,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          args: >-
-            ${{ matrix.os == 'ubuntu-latest' && '--bundles appimage' || '' }}
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: tektite-${{ matrix.name }}
-          path: ${{ matrix.artifact-pattern }}
-          if-no-files-found: error
-          retention-days: 30
+          tagName: ${{ github.ref_name }}
+          releaseName: tektite ${{ github.ref_name }}
+          releaseBody: |
+            Binary artifacts for tektite ${{ github.ref_name }}.
+          releaseDraft: false
+          prerelease: false
+          args: --bundles ${{ matrix.bundles }}
