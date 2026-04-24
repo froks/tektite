@@ -74,7 +74,6 @@ const headingLineClass = [1, 2, 3, 4, 5, 6].map(n =>
 const blockquoteLine = Decoration.line({ class: 'md-blockquote-line' })
 const codeBlockLine = Decoration.line({ class: 'md-codeblock-line' })
 const codeFenceLine = Decoration.line({ class: 'md-codefence-line' })
-const codeFenceAnchor = Decoration.line({ class: 'md-codefence-anchor' })
 const tableHeaderLine = Decoration.line({ class: 'md-table-header' })
 const tableRowLine = Decoration.line({ class: 'md-table-row' })
 const tableSepLine = Decoration.line({ class: 'md-table-sep' })
@@ -270,23 +269,24 @@ function buildDecorations(
           const closeFenceLine = doc.lineAt(to)
           const active = isActiveBlock(from)
 
-          // Always put the copy button anchor + button on the opening fence line
-          decs.push(codeFenceAnchor.range(openFenceLine.from))
+          // Always apply background + anchor to opening fence line
+          decs.push(codeFenceLine.range(openFenceLine.from))
           const codeTextNode = node.node.getChild('CodeText')
           const codeText = codeTextNode ? src.slice(codeTextNode.from, codeTextNode.to) : ''
           pushWidget(new CopyButtonWidget(codeText), openFenceLine.to)
 
-          if (!active) {
-            // Hide both fence lines, style body lines with bg
-            pushMark(hideMark, openFenceLine.from, openFenceLine.to)
-            decs.push(codeFenceLine.range(openFenceLine.from))
+          if (closeFenceLine.number !== openFenceLine.number) {
+            // Always apply background to body lines and closing fence line
+            for (let n = openFenceLine.number + 1; n <= closeFenceLine.number; n++) {
+              decs.push(codeBlockLine.range(doc.line(n).from))
+            }
+          }
 
+          if (!active) {
+            // Hide fence marker lines when not editing inside the block
+            pushMark(hideMark, openFenceLine.from, openFenceLine.to)
             if (closeFenceLine.number !== openFenceLine.number) {
               pushMark(hideMark, closeFenceLine.from, closeFenceLine.to)
-
-              for (let n = openFenceLine.number + 1; n < closeFenceLine.number; n++) {
-                decs.push(codeBlockLine.range(doc.line(n).from))
-              }
             }
           }
           return false // don't recurse into code block children
@@ -349,28 +349,27 @@ function buildDecorations(
             : italicMark
 
           if (!isActiveLine(from)) {
-            // Hide all EmphasisMark / StrikethroughMark children, style content
+            // Style the whole node first, then hide the syntax marker children
+            decs.push(dec.range(from, to))
             node.node.cursor().iterate(child => {
               if (child.name === 'EmphasisMark' || child.name === 'StrikethroughMark') {
-                pushMark(hideMark, child.from, child.to)
+                decs.push(hideMark.range(child.from, child.to))
               }
             })
-            // Style the whole node as bold/italic/strike — marks hide the syntax
-            pushMark(dec, from, to)
           } else {
             // Active line: style but leave markers visible
-            pushMark(dec, from, to)
+            decs.push(dec.range(from, to))
           }
           return false
         }
 
         // ── Inline code ────────────────────────────────────────────────────
         if (name === 'InlineCode') {
+          decs.push(codeMark.range(from, to))
           if (!isActiveLine(from)) {
             const marks = node.node.getChildren('CodeMark')
-            marks.forEach(m => pushMark(hideMark, m.from, m.to))
+            marks.forEach(m => decs.push(hideMark.range(m.from, m.to)))
           }
-          pushMark(codeMark, from, to)
           return false
         }
 
