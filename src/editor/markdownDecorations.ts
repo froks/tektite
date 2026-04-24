@@ -10,6 +10,10 @@
  * - Lines containing the cursor: raw markdown shown with light styling on content.
  * - Heading font sizes always applied (even on the active line) for consistency.
  * - Fenced code blocks: revealed entirely when the cursor is anywhere inside.
+ *
+ * IMPORTANT: Block decorations (block:true) must come from a StateField, not a
+ * ViewPlugin — CM6 enforces this with a RangeError at runtime. The async link
+ * existence check is the only thing that stays in a ViewPlugin.
  */
 
 import {
@@ -20,28 +24,28 @@ import {
   ViewUpdate,
   WidgetType,
 } from '@codemirror/view'
-import { Range } from '@codemirror/state'
+import { EditorState, Range, StateEffect, StateField } from '@codemirror/state'
 import { syntaxTree } from '@codemirror/language'
 import { invoke } from '@tauri-apps/api/core'
 import { resolveLink, resolveWikiLink, isInternalLink } from './linkResolver'
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-function cursorLineNumbers(view: EditorView): Set<number> {
+function cursorLineNumbers(state: EditorState): Set<number> {
   const lines = new Set<number>()
-  for (const range of view.state.selection.ranges) {
-    const fromLine = view.state.doc.lineAt(range.from).number
-    const toLine = view.state.doc.lineAt(range.to).number
+  for (const range of state.selection.ranges) {
+    const fromLine = state.doc.lineAt(range.from).number
+    const toLine = state.doc.lineAt(range.to).number
     for (let l = fromLine; l <= toLine; l++) lines.add(l)
   }
   return lines
 }
 
 /** Returns the set of all line numbers that belong to code blocks touching a cursor line. */
-function activeCodeBlockLineNumbers(view: EditorView, cursorLines: Set<number>): Set<number> {
+function activeCodeBlockLineNumbers(state: EditorState, cursorLines: Set<number>): Set<number> {
   const result = new Set<number>()
-  const doc = view.state.doc
-  syntaxTree(view.state).iterate({
+  const doc = state.doc
+  syntaxTree(state).iterate({
     enter(node) {
       if (node.name !== 'FencedCode' && node.name !== 'CodeBlock') return
       const startLine = doc.lineAt(node.from).number
@@ -71,14 +75,12 @@ const linkUrlMark = Decoration.mark({ class: 'md-link-url' })
 const headingLineClass = [1, 2, 3, 4, 5, 6].map(n =>
   Decoration.line({ class: `md-h${n}` })
 )
-const blockquoteLine = Decoration.line({ class: 'md-blockquote-line' })
+const blockquoteLines = [1, 2, 3, 4].map(n =>
+  Decoration.line({ class: `md-blockquote-line md-blockquote-depth-${n}` })
+)
+const quoteMarkMark = Decoration.mark({ class: 'md-blockquote-mark' })
 const codeBlockLine = Decoration.line({ class: 'md-codeblock-line' })
 const codeFenceLine = Decoration.line({ class: 'md-codefence-line' })
-const tableHeaderLine = Decoration.line({ class: 'md-table-header' })
-const tableRowLine = Decoration.line({ class: 'md-table-row' })
-const tableSepLine = Decoration.line({ class: 'md-table-sep' })
-const tableDelimMark = Decoration.mark({ class: 'md-table-delim' })
-const tableCellMark = Decoration.mark({ class: 'md-table-cell' })
 
 // ─── Copy button ──────────────────────────────────────────────────────────────
 
@@ -107,6 +109,76 @@ class CopyButtonWidget extends WidgetType {
     })
     return btn
   }
+  ignoreEvent() { return false }
+}
+
+// ─── Table widget ─────────────────────────────────────────────────────────────
+
+type CellAlign = 'left' | 'center' | 'right' | ''
+
+function parseAlignments(sepText: string): CellAlign[] {
+  return sepText
+    .split('|')
+    .slice(1, -1)
+    .map(cell => {
+      const c = cell.trim()
+      if (c.startsWith(':') && c.endsWith(':')) return 'center'
+      if (c.endsWith(':')) return 'right'
+      if (c.startsWith(':')) return 'left'
+      return ''
+    })
+}
+
+// Unescape markdown escape sequences (e.g. \| → |, \* → *)
+function mdUnescape(text: string): string {
+  return text.replace(/\\(.)/g, '$1')
+}
+
+class TableWidget extends WidgetType {
+  constructor(
+    private readonly key: string,
+    private readonly headers: string[],
+    private readonly alignments: CellAlign[],
+    private readonly rows: string[][],
+  ) { super() }
+
+  eq(other: TableWidget) { return other.key === this.key }
+
+  toDOM(): HTMLElement {
+    const wrap = document.createElement('div')
+    wrap.className = 'md-table-widget'
+    const table = document.createElement('table')
+    wrap.appendChild(table)
+
+    const thead = document.createElement('thead')
+    table.appendChild(thead)
+    const headerTr = document.createElement('tr')
+    thead.appendChild(headerTr)
+    for (let i = 0; i < this.headers.length; i++) {
+      const th = document.createElement('th')
+      th.textContent = mdUnescape(this.headers[i])
+      const align = this.alignments[i]
+      if (align) th.style.textAlign = align
+      headerTr.appendChild(th)
+    }
+
+    const tbody = document.createElement('tbody')
+    table.appendChild(tbody)
+    for (const row of this.rows) {
+      const tr = document.createElement('tr')
+      tbody.appendChild(tr)
+      for (let i = 0; i < this.headers.length; i++) {
+        const td = document.createElement('td')
+        td.textContent = mdUnescape(row[i] ?? '')
+        const align = this.alignments[i]
+        if (align) td.style.textAlign = align
+        tr.appendChild(td)
+      }
+    }
+
+    return wrap
+  }
+
   ignoreEvent() { return false }
 }
 
@@ -178,28 +250,25 @@ class LinkWidget extends WidgetType {
 // ─── Link scanning for existence checks ──────────────────────────────────────
 
 function collectInternalLinkPaths(
-  view: EditorView,
+  state: EditorState,
   currentFilePath: string,
   rootPath: string,
 ): string[] {
   const paths: string[] = []
-  const doc = view.state.doc
+  const doc = state.doc
   const src = doc.toString()
 
-  syntaxTree(view.state).iterate({
+  syntaxTree(state).iterate({
     enter(node) {
       if (node.name === 'Link') {
-        // Check for wiki-link: char before node.from is '[' and char after node.to is ']'
         const isWiki = node.from > 0 && src[node.from - 1] === '[' &&
           node.to < src.length && src[node.to] === ']'
 
-        // Get URL child
         let urlText = ''
         node.node.getChildren('URL').forEach(u => { urlText = src.slice(u.from, u.to) })
 
         if (isWiki) {
-          // Wiki-link: inner text is the target (may have |display)
-          const inner = src.slice(node.from + 1, node.to - 1) // strip [ ]
+          const inner = src.slice(node.from + 1, node.to - 1)
           const target = inner.split('|')[0]
           paths.push(resolveWikiLink(target, currentFilePath, rootPath))
         } else if (urlText && isInternalLink(urlText)) {
@@ -215,7 +284,7 @@ function collectInternalLinkPaths(
 // ─── Main decoration builder ──────────────────────────────────────────────────
 
 function buildDecorations(
-  view: EditorView,
+  state: EditorState,
   existenceCache: Map<string, boolean>,
   currentFilePath: string,
   rootPath: string,
@@ -223,14 +292,11 @@ function buildDecorations(
 ): DecorationSet {
   try {
     const decs: Range<Decoration>[] = []
-    const doc = view.state.doc
+    const doc = state.doc
     const src = doc.toString()
-    const cursorLines = cursorLineNumbers(view)
-    const activeBlockLines = activeCodeBlockLineNumbers(view, cursorLines)
+    const cursorLines = cursorLineNumbers(state)
+    const activeBlockLines = activeCodeBlockLineNumbers(state, cursorLines)
 
-    // Track which character positions have already been decorated (marks only,
-    // widgets are point decorations and don't occupy ranges).
-    // We use a simple sorted list of [from,to] pairs and check before inserting.
     const markedRanges: Array<[number, number]> = []
 
     function overlaps(from: number, to: number): boolean {
@@ -258,8 +324,21 @@ function buildDecorations(
       return activeBlockLines.has(doc.lineAt(pos).number)
     }
 
+    // ── Pre-pass: compute blockquote nesting depth per line ──────────────────
+    const blockquoteDepth = new Map<number, number>()
+    syntaxTree(state).iterate({
+      enter(node) {
+        if (node.name !== 'Blockquote') return
+        const startLine = doc.lineAt(node.from).number
+        const endLine = doc.lineAt(node.to).number
+        for (let n = startLine; n <= endLine; n++) {
+          blockquoteDepth.set(n, (blockquoteDepth.get(n) ?? 0) + 1)
+        }
+      },
+    })
+
     // ── Walk the syntax tree ─────────────────────────────────────────────────
-    syntaxTree(view.state).iterate({
+    syntaxTree(state).iterate({
       enter(node) {
         const { name, from, to } = node
 
@@ -269,27 +348,24 @@ function buildDecorations(
           const closeFenceLine = doc.lineAt(to)
           const active = isActiveBlock(from)
 
-          // Always apply background + anchor to opening fence line
           decs.push(codeFenceLine.range(openFenceLine.from))
           const codeTextNode = node.node.getChild('CodeText')
           const codeText = codeTextNode ? src.slice(codeTextNode.from, codeTextNode.to) : ''
           pushWidget(new CopyButtonWidget(codeText), openFenceLine.to)
 
           if (closeFenceLine.number !== openFenceLine.number) {
-            // Always apply background to body lines and closing fence line
             for (let n = openFenceLine.number + 1; n <= closeFenceLine.number; n++) {
               decs.push(codeBlockLine.range(doc.line(n).from))
             }
           }
 
           if (!active) {
-            // Hide fence marker lines when not editing inside the block
             pushMark(hideMark, openFenceLine.from, openFenceLine.to)
             if (closeFenceLine.number !== openFenceLine.number) {
               pushMark(hideMark, closeFenceLine.from, closeFenceLine.to)
             }
           }
-          return false // don't recurse into code block children
+          return // don't recurse into code block children via our decorator
         }
 
         // ── Horizontal rules ───────────────────────────────────────────────
@@ -307,15 +383,12 @@ function buildDecorations(
           const level = parseInt(headingMatch[1]) - 1
           const line = doc.lineAt(from)
           decs.push(headingLineClass[level].range(line.from))
-          // HeaderMark children are handled below — skip returning false so
-          // we recurse to pick up HeaderMark and inline nodes
           return
         }
 
         // ── HeaderMark (the # characters) ─────────────────────────────────
         if (name === 'HeaderMark') {
           if (!isActiveLine(from)) {
-            // Hide the mark plus the space after it
             pushMark(hideMark, from, to + 1)
           }
           return false
@@ -323,12 +396,20 @@ function buildDecorations(
 
         // ── Blockquote ─────────────────────────────────────────────────────
         if (name === 'Blockquote') {
-          decs.push(blockquoteLine.range(doc.lineAt(from).from))
+          if (node.node.parent?.name === 'Blockquote') return
+          const startLine = doc.lineAt(from).number
+          const endLine = doc.lineAt(to).number
+          for (let n = startLine; n <= endLine; n++) {
+            if (!cursorLines.has(n)) {
+              const depth = Math.min(blockquoteDepth.get(n) ?? 1, 4)
+              decs.push(blockquoteLines[depth - 1].range(doc.line(n).from))
+            }
+          }
           return
         }
 
         if (name === 'QuoteMark') {
-          pushMark(hideMark, from, to + (src[to] === ' ' ? 1 : 0))
+          pushMark(quoteMarkMark, from, to + (src[to] === ' ' ? 1 : 0))
           return false
         }
 
@@ -349,7 +430,6 @@ function buildDecorations(
             : italicMark
 
           if (!isActiveLine(from)) {
-            // Style the whole node first, then hide the syntax marker children
             decs.push(dec.range(from, to))
             node.node.cursor().iterate(child => {
               if (child.name === 'EmphasisMark' || child.name === 'StrikethroughMark') {
@@ -357,7 +437,6 @@ function buildDecorations(
               }
             })
           } else {
-            // Active line: style but leave markers visible
             decs.push(dec.range(from, to))
           }
           return false
@@ -375,7 +454,6 @@ function buildDecorations(
 
         // ── Links (including wiki-links) ───────────────────────────────────
         if (name === 'Link') {
-          // Detect wiki-link: preceded by '[' and followed by ']'
           const isWiki = from > 0 && src[from - 1] === '[' &&
             to < src.length && src[to] === ']'
 
@@ -383,10 +461,9 @@ function buildDecorations(
           const urlText = urlNode ? src.slice(urlNode.from, urlNode.to) : ''
 
           if (isWiki) {
-            // The outer [[ and ]] are plain text — cover them too
             const wikiFrom = from - 1
             const wikiTo = to + 1
-            const inner = src.slice(from + 1, to - 1)  // strip inner [ ]
+            const inner = src.slice(from + 1, to - 1)
             const pipeIdx = inner.indexOf('|')
             const target = pipeIdx >= 0 ? inner.slice(0, pipeIdx) : inner
             const label = pipeIdx >= 0 ? inner.slice(pipeIdx + 1) : target.replace(/\.md$/, '')
@@ -403,9 +480,7 @@ function buildDecorations(
             return false
           }
 
-          // Standard link
           if (!isActiveLine(from)) {
-            // Get the label text (between first LinkMark [ and ])
             const linkMarks = node.node.getChildren('LinkMark')
             const labelStart = linkMarks[0] ? linkMarks[0].to : from + 1
             const labelEnd = linkMarks[1] ? linkMarks[1].from : (urlNode ? urlNode.from - 2 : to)
@@ -423,7 +498,6 @@ function buildDecorations(
               to,
             )
           } else {
-            // Active: style label and URL in place
             const linkMarks = node.node.getChildren('LinkMark')
             const labelStart = linkMarks[0] ? linkMarks[0].to : from + 1
             const labelEnd = linkMarks[1] ? linkMarks[1].from : to
@@ -436,7 +510,6 @@ function buildDecorations(
         // ── Image — leave as-is (just style alt text) ─────────────────────
         if (name === 'Image') {
           if (!isActiveLine(from)) {
-            // Show as plain styled text with the alt text
             const linkMarks = node.node.getChildren('LinkMark')
             const labelStart = linkMarks[0] ? linkMarks[0].to : from + 2
             const labelEnd = linkMarks[1] ? linkMarks[1].from : to
@@ -447,58 +520,58 @@ function buildDecorations(
 
         // ── Tables ─────────────────────────────────────────────────────────
         if (name === 'Table') {
-          // Walk table children manually so we can classify each row
+          const tableStartLine = doc.lineAt(from).number
+          const tableEndLine = doc.lineAt(to).number
+          let activeInTable = false
+          for (let n = tableStartLine; n <= tableEndLine; n++) {
+            if (cursorLines.has(n)) { activeInTable = true; break }
+          }
+          if (activeInTable) return false
+
           const tableNode = node.node
+
+          const headers: string[] = []
           for (const child of tableNode.getChildren('TableHeader')) {
-            const line = doc.lineAt(child.from)
-            decs.push(tableHeaderLine.range(line.from))
             for (const td of child.getChildren('TableCell')) {
-              pushMark(tableCellMark, td.from, td.to)
-            }
-            for (const td of child.getChildren('TableDelimiter')) {
-              pushMark(tableDelimMark, td.from, td.to)
+              headers.push(src.slice(td.from, td.to).trim())
             }
           }
-          // Delimiter/separator row (the |---|---| line) — it's a direct child
-          // named TableDelimiter at the Table level in some parser versions,
-          // but in @lezer/markdown GFM it comes out as a row of TableDelimiters
-          // inside the Table (between header and rows). Detect it by checking
-          // if the line only contains dashes, pipes and spaces.
-          const allRows = tableNode.getChildren('TableRow')
-          for (const row of allRows) {
+
+          let alignments: CellAlign[] = headers.map(() => '')
+          for (const d of tableNode.getChildren('TableDelimiter')) {
+            const sepText = src.slice(d.from, d.to)
+            if (/^[\s|:\-]+$/.test(sepText)) {
+              alignments = parseAlignments(sepText)
+              break
+            }
+          }
+
+          const rows: string[][] = []
+          for (const row of tableNode.getChildren('TableRow')) {
             const rowLine = doc.lineAt(row.from)
-            const lineText = src.slice(rowLine.from, rowLine.to)
-            const isSep = /^[\s|:\-]+$/.test(lineText)
-            if (isSep) {
-              decs.push(tableSepLine.range(rowLine.from))
-            } else {
-              decs.push(tableRowLine.range(rowLine.from))
-              for (const td of row.getChildren('TableCell')) {
-                pushMark(tableCellMark, td.from, td.to)
-              }
-              for (const td of row.getChildren('TableDelimiter')) {
-                pushMark(tableDelimMark, td.from, td.to)
-              }
+            if (/^[\s|:\-]+$/.test(src.slice(rowLine.from, rowLine.to))) continue
+            const cells: string[] = []
+            for (const td of row.getChildren('TableCell')) {
+              cells.push(src.slice(td.from, td.to).trim())
             }
+            rows.push(cells)
           }
-          // Handle the separator row that sits between TableHeader and TableRow
-          // as direct TableDelimiter children of Table (lezer GFM layout)
-          const directDelims = tableNode.getChildren('TableDelimiter')
-          for (const d of directDelims) {
-            const line = doc.lineAt(d.from)
-            const lineText = src.slice(line.from, line.to)
-            if (/^[\s|:\-]+$/.test(lineText)) {
-              decs.push(tableSepLine.range(line.from))
-            }
-          }
+
+          // Align range exactly to line boundaries (required for block:true).
+          const lineFrom = doc.lineAt(from).from
+          const lineTo = doc.lineAt(to).to
+
+          decs.push(
+            Decoration.replace({
+              widget: new TableWidget(src.slice(from, to), headers, alignments, rows),
+              block: true,
+            }).range(lineFrom, lineTo),
+          )
           return false
         }
       },
     })
 
-    // Sort by from, then by startSide (CodeMirror internal field).
-    // startSide: marks = -1, line = -1, widget(side:-1) = -1, widget(side:1) = 1
-    // At same `from`, lower startSide must come first.
     decs.sort((a, b) => {
       if (a.from !== b.from) return a.from - b.from
       const sideA = (a.value as unknown as { startSide: number }).startSide ?? 0
@@ -522,23 +595,64 @@ export interface MarkdownDecorationsOptions {
 }
 
 export function createMarkdownDecorations(options: MarkdownDecorationsOptions) {
-  return ViewPlugin.fromClass(
+  // StateEffect / StateField for the async link existence cache.
+  // Kept separate from the decoration StateField so a cache update can trigger
+  // a decoration rebuild without a full doc change.
+  const updateExistenceCache = StateEffect.define<Map<string, boolean>>()
+
+  const existenceCacheField = StateField.define<Map<string, boolean>>({
+    create: () => new Map(),
+    update(cache, tr) {
+      for (const effect of tr.effects) {
+        if (effect.is(updateExistenceCache)) return effect.value
+      }
+      return cache
+    },
+  })
+
+  // StateField for all decorations (including block widgets).
+  // CM6 requires block:true decorations to come from a StateField, not a ViewPlugin.
+  const decorationsField = StateField.define<DecorationSet>({
+    create(state) {
+      return buildDecorations(
+        state,
+        state.field(existenceCacheField),
+        options.currentFilePath(),
+        options.rootPath(),
+        options.onNavigate,
+      )
+    },
+    update(deco, tr) {
+      if (
+        tr.docChanged ||
+        tr.selection ||
+        tr.effects.some(e => e.is(updateExistenceCache))
+      ) {
+        return buildDecorations(
+          tr.state,
+          tr.state.field(existenceCacheField),
+          options.currentFilePath(),
+          options.rootPath(),
+          options.onNavigate,
+        )
+      }
+      return deco.map(tr.changes)
+    },
+    provide: f => EditorView.decorations.from(f),
+  })
+
+  // ViewPlugin for async link existence checks only — no decorations here.
+  const linkCheckerPlugin = ViewPlugin.fromClass(
     class {
-      decorations: DecorationSet
-      existenceCache = new Map<string, boolean>()
       private pendingCheck = false
 
       constructor(view: EditorView) {
-        this.decorations = buildDecorations(view, this.existenceCache, options.currentFilePath(), options.rootPath(), options.onNavigate)
         this.scheduleExistenceCheck(view)
       }
 
       update(update: ViewUpdate) {
-        if (update.docChanged || update.selectionSet || update.viewportChanged) {
-          this.decorations = buildDecorations(update.view, this.existenceCache, options.currentFilePath(), options.rootPath(), options.onNavigate)
-          if (update.docChanged) {
-            this.scheduleExistenceCheck(update.view)
-          }
+        if (update.docChanged) {
+          this.scheduleExistenceCheck(update.view)
         }
       }
 
@@ -549,25 +663,28 @@ export function createMarkdownDecorations(options: MarkdownDecorationsOptions) {
         const rPath = options.rootPath()
         if (!filePath) { this.pendingCheck = false; return }
 
-        const paths = collectInternalLinkPaths(view, filePath, rPath)
+        const paths = collectInternalLinkPaths(view.state, filePath, rPath)
         if (paths.length === 0) { this.pendingCheck = false; return }
 
         const unique = [...new Set(paths)]
         Promise.all(
           unique.map(async p => ({ p, exists: await invoke<boolean>('file_exists', { path: p }) }))
         ).then(results => {
+          const currentCache = view.state.field(existenceCacheField)
+          const newCache = new Map(currentCache)
           let changed = false
           for (const { p, exists } of results) {
-            if (this.existenceCache.get(p) !== exists) {
-              this.existenceCache.set(p, exists)
+            if (newCache.get(p) !== exists) {
+              newCache.set(p, exists)
               changed = true
             }
           }
           this.pendingCheck = false
-          if (changed) view.dispatch({})
+          if (changed) view.dispatch({ effects: updateExistenceCache.of(newCache) })
         }).catch(() => { this.pendingCheck = false })
       }
     },
-    { decorations: v => v.decorations }
   )
+
+  return [existenceCacheField, decorationsField, linkCheckerPlugin]
 }

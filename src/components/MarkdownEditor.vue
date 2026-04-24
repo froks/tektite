@@ -5,7 +5,21 @@ import { EditorState } from '@codemirror/state'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { languages } from '@codemirror/language-data'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
+import { HighlightStyle, LanguageDescription, syntaxHighlighting } from '@codemirror/language'
+import { tags as t } from '@lezer/highlight'
+import { php } from '@codemirror/lang-php'
 import { createMarkdownDecorations } from '../editor/markdownDecorations'
+
+// Replace the language-data PHP entry (which calls php() without plain:true and
+// therefore expects a <?php opening tag) with one that uses plain:true so that
+// code fences containing raw PHP without <?php are highlighted correctly.
+const phpPlain = LanguageDescription.of({
+  name: 'PHP',
+  alias: ['php'],
+  extensions: ['php', 'php3', 'php4', 'php5', 'php7', 'phtml'],
+  support: php({ plain: true }),
+})
+const codeLanguages = [phpPlain, ...languages.filter(l => l.name !== 'PHP')]
 
 const props = defineProps<{
   content: string
@@ -183,12 +197,13 @@ const editorTheme = EditorView.theme({
   },
   '.md-blockquote-line': {
     borderLeft: '3px solid var(--accent)',
-    paddingLeft: '12px',
+    paddingLeft: '8px',
     color: 'var(--text-muted)',
     fontStyle: 'italic',
   },
   '.md-blockquote-mark': {
     opacity: '0.35',
+    fontStyle: 'normal',
   },
   '.md-hr-widget': {
     display: 'block',
@@ -222,31 +237,65 @@ const editorTheme = EditorView.theme({
   '.md-copy-btn:hover': {
     color: 'var(--text)',
   },
-  // Table styles
-  '.md-table-header': {
+  // Table widget styles
+  '.md-table-widget': {
+    margin: '2px 0',
+    display: 'block',
+  },
+  '.md-table-widget table': {
+    borderCollapse: 'collapse',
+    borderSpacing: '0',
+  },
+  '.md-table-widget th, .md-table-widget td': {
+    padding: '4px 16px 4px 4px',
+    borderBottom: '1px solid var(--border)',
+    whiteSpace: 'pre',
+  },
+  '.md-table-widget thead th': {
     fontWeight: '700',
     borderBottom: '2px solid var(--border)',
-    color: 'var(--text)',
-  },
-  '.md-table-row': {
-    borderBottom: '1px solid var(--border)',
-  },
-  '.md-table-sep': {
-    fontSize: '0',
-    height: '0',
-    padding: '0',
-    overflow: 'hidden',
-    lineHeight: '0',
-    borderBottom: '2px solid var(--border)',
-  },
-  '.md-table-delim': {
-    color: 'var(--border)',
-    opacity: '0.5',
-  },
-  '.md-table-cell': {
-    paddingRight: '12px',
   },
 }, { dark: true })
+
+// Catppuccin-based syntax highlight style (works for both Mocha dark and Latte light
+// because the token colours are taken from their respective palettes and the theme
+// switcher changes CSS variables at runtime — we hard-code Mocha values here since the
+// EditorView theme is declared dark:true; for a full light-mode highlight style a
+// second HighlightStyle would be needed).
+const codeHighlightStyle = HighlightStyle.define([
+  { tag: t.keyword,               color: '#cba6f7' }, // mauve
+  { tag: t.controlKeyword,        color: '#cba6f7' },
+  { tag: t.operatorKeyword,       color: '#cba6f7' },
+  { tag: t.definitionKeyword,     color: '#cba6f7' },
+  { tag: t.moduleKeyword,         color: '#cba6f7' },
+  { tag: [t.string, t.special(t.string)], color: '#a6e3a1' }, // green
+  { tag: t.number,                color: '#fab387' }, // peach
+  { tag: t.bool,                  color: '#fab387' },
+  { tag: t.null,                  color: '#fab387' },
+  { tag: t.comment,               color: '#6c7086', fontStyle: 'italic' }, // overlay0
+  { tag: t.lineComment,           color: '#6c7086', fontStyle: 'italic' },
+  { tag: t.blockComment,          color: '#6c7086', fontStyle: 'italic' },
+  { tag: [t.function(t.name), t.function(t.definition(t.name))], color: '#89b4fa' }, // blue
+  { tag: t.definition(t.name),    color: '#89dceb' }, // sky
+  { tag: t.typeName,              color: '#f9e2af' }, // yellow
+  { tag: t.className,             color: '#f9e2af' },
+  { tag: t.namespace,             color: '#f9e2af' },
+  { tag: t.propertyName,         color: '#89dceb' }, // sky
+  { tag: t.variableName,          color: '#cdd6f4' }, // text
+  { tag: t.definition(t.variableName), color: '#89dceb' },
+  { tag: t.operator,              color: '#89dceb' },
+  { tag: t.punctuation,           color: '#9399b2' }, // overlay2
+  { tag: t.angleBracket,          color: '#9399b2' },
+  { tag: t.tagName,               color: '#f38ba8' }, // red
+  { tag: t.attributeName,         color: '#fab387' }, // peach
+  { tag: t.attributeValue,        color: '#a6e3a1' }, // green
+  { tag: t.regexp,                color: '#f2cdcd' }, // flamingo
+  { tag: t.escape,                color: '#f2cdcd' },
+  { tag: t.link,                  color: '#89b4fa', textDecoration: 'underline' },
+  { tag: t.url,                   color: '#89b4fa' },
+  { tag: t.meta,                  color: '#7f849c' }, // overlay1
+  { tag: t.atom,                  color: '#fab387' },
+])
 
 function createState(content: string) {
   return EditorState.create({
@@ -256,7 +305,8 @@ function createState(content: string) {
       drawSelection(),
       dropCursor(),
       highlightActiveLine(),
-      markdown({ base: markdownLanguage, codeLanguages: languages }),
+      markdown({ base: markdownLanguage, codeLanguages }),
+      syntaxHighlighting(codeHighlightStyle),
       markdownDecorations,
       EditorView.lineWrapping,
       keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
