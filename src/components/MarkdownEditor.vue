@@ -77,6 +77,13 @@ const editorTheme = EditorView.theme({
   '&.cm-focused .cm-selectionBackground': {
     background: 'var(--selection-bg) !important',
   },
+  // CM6 puts the selection layer at z-index:-1 (behind .cm-content) so opaque
+  // line backgrounds (e.g. code blocks) hide it. Raise it above content so
+  // selections are visible everywhere. The layer uses an inline style, so
+  // !important is required to win.
+  '.cm-selectionLayer': {
+    zIndex: '1 !important',
+  },
   // Active line highlight
   '.cm-activeLine': {
     background: 'var(--active-line-bg)',
@@ -158,20 +165,22 @@ const editorTheme = EditorView.theme({
     color: 'var(--code-fg)',
   },
   '.md-codeblock-line': {
-    background: 'var(--code-block-bg)',
+    background: 'var(--code-block-bg) !important',
     fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
     fontSize: '0.9em',
     display: 'block',
+    borderRadius: '0 !important',
   },
   '.md-codefence-anchor': {
     position: 'relative',
   },
   '.md-codefence-line': {
-    background: 'var(--code-block-bg)',
+    background: 'var(--code-block-bg) !important',
     fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
     fontSize: '0.9em',
     display: 'block',
     position: 'relative',
+    borderRadius: '0 !important',
   },
   '.md-link-text': {
     color: 'var(--accent)',
@@ -196,10 +205,33 @@ const editorTheme = EditorView.theme({
     cursor: 'default',
   },
   '.md-blockquote-line': {
-    borderLeft: '3px solid var(--accent)',
-    paddingLeft: '8px',
     color: 'var(--text-muted)',
     fontStyle: 'italic',
+    backgroundRepeat: 'no-repeat',
+    backgroundSize: '3px 100%',
+  },
+  '.md-blockquote-depth-1': {
+    backgroundImage: 'linear-gradient(var(--accent), var(--accent))',
+    backgroundPosition: '0 0',
+    paddingLeft: '11px',
+  },
+  '.md-blockquote-depth-2': {
+    backgroundImage:
+      'linear-gradient(var(--accent), var(--accent)), linear-gradient(var(--accent), var(--accent))',
+    backgroundPosition: '0 0, 11px 0',
+    paddingLeft: '22px',
+  },
+  '.md-blockquote-depth-3': {
+    backgroundImage:
+      'linear-gradient(var(--accent), var(--accent)), linear-gradient(var(--accent), var(--accent)), linear-gradient(var(--accent), var(--accent))',
+    backgroundPosition: '0 0, 11px 0, 22px 0',
+    paddingLeft: '33px',
+  },
+  '.md-blockquote-depth-4': {
+    backgroundImage:
+      'linear-gradient(var(--accent), var(--accent)), linear-gradient(var(--accent), var(--accent)), linear-gradient(var(--accent), var(--accent)), linear-gradient(var(--accent), var(--accent))',
+    backgroundPosition: '0 0, 11px 0, 22px 0, 33px 0',
+    paddingLeft: '44px',
   },
   '.md-blockquote-mark': {
     opacity: '0.35',

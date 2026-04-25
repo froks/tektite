@@ -25,7 +25,7 @@ import {
   WidgetType,
 } from '@codemirror/view'
 import { EditorState, Range, StateEffect, StateField } from '@codemirror/state'
-import { syntaxTree } from '@codemirror/language'
+import { syntaxTree, ensureSyntaxTree } from '@codemirror/language'
 import { invoke } from '@tauri-apps/api/core'
 import { resolveLink, resolveWikiLink, isInternalLink } from './linkResolver'
 
@@ -42,10 +42,9 @@ function cursorLineNumbers(state: EditorState): Set<number> {
 }
 
 /** Returns the set of all line numbers that belong to code blocks touching a cursor line. */
-function activeCodeBlockLineNumbers(state: EditorState, cursorLines: Set<number>): Set<number> {
+function activeCodeBlockLineNumbers(tree: import('@lezer/common').Tree, doc: import('@codemirror/state').Text, cursorLines: Set<number>): Set<number> {
   const result = new Set<number>()
-  const doc = state.doc
-  syntaxTree(state).iterate({
+  tree.iterate({
     enter(node) {
       if (node.name !== 'FencedCode' && node.name !== 'CodeBlock') return
       const startLine = doc.lineAt(node.from).number
@@ -295,7 +294,11 @@ function buildDecorations(
     const doc = state.doc
     const src = doc.toString()
     const cursorLines = cursorLineNumbers(state)
-    const activeBlockLines = activeCodeBlockLineNumbers(state, cursorLines)
+
+    // Use ensureSyntaxTree so the full document is parsed before we decorate.
+    const tree = ensureSyntaxTree(state, state.doc.length, 100) ?? syntaxTree(state)
+
+    const activeBlockLines = activeCodeBlockLineNumbers(tree, doc, cursorLines)
 
     const markedRanges: Array<[number, number]> = []
 
@@ -326,7 +329,7 @@ function buildDecorations(
 
     // ── Pre-pass: compute blockquote nesting depth per line ──────────────────
     const blockquoteDepth = new Map<number, number>()
-    syntaxTree(state).iterate({
+    tree.iterate({
       enter(node) {
         if (node.name !== 'Blockquote') return
         const startLine = doc.lineAt(node.from).number
@@ -338,7 +341,7 @@ function buildDecorations(
     })
 
     // ── Walk the syntax tree ─────────────────────────────────────────────────
-    syntaxTree(state).iterate({
+    tree.iterate({
       enter(node) {
         const { name, from, to } = node
 
@@ -409,7 +412,12 @@ function buildDecorations(
         }
 
         if (name === 'QuoteMark') {
-          pushMark(quoteMarkMark, from, to + (src[to] === ' ' ? 1 : 0))
+          const markTo = to + (src[to] === ' ' ? 1 : 0)
+          if (!isActiveLine(from)) {
+            pushMark(hideMark, from, markTo)
+          } else {
+            pushMark(quoteMarkMark, from, markTo)
+          }
           return false
         }
 
@@ -626,7 +634,8 @@ export function createMarkdownDecorations(options: MarkdownDecorationsOptions) {
       if (
         tr.docChanged ||
         tr.selection ||
-        tr.effects.some(e => e.is(updateExistenceCache))
+        tr.effects.some(e => e.is(updateExistenceCache)) ||
+        syntaxTree(tr.state) !== syntaxTree(tr.startState)
       ) {
         return buildDecorations(
           tr.state,
