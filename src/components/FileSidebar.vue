@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 
@@ -27,16 +27,25 @@ const childrenMap = ref<Map<string, FileEntry[]>>(new Map())
 const expandedDirs = ref<Set<string>>(new Set())
 const error = ref<string | null>(null)
 
+async function openFolderPath(path: string) {
+  rootPath.value = path
+  childrenMap.value = new Map()
+  expandedDirs.value = new Set()
+  await loadDirectory(path, true)
+  emit('folderOpened', path)
+}
+
 async function openFolder() {
   const selected = await open({ directory: true, multiple: false })
   if (selected && typeof selected === 'string') {
-    rootPath.value = selected
-    childrenMap.value = new Map()
-    expandedDirs.value = new Set()
-    await loadDirectory(selected, true)
-    emit('folderOpened', selected)
+    await openFolderPath(selected)
   }
 }
+
+onMounted(async () => {
+  const initial = await invoke<string | null>('get_initial_folder')
+  if (initial) await openFolderPath(initial)
+})
 
 async function loadDirectory(path: string, isRoot = false): Promise<FileEntry[]> {
   try {

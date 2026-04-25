@@ -76,6 +76,19 @@ fn file_exists(path: String) -> bool {
 }
 
 #[tauri::command]
+fn get_initial_folder() -> Option<String> {
+    let args: Vec<String> = std::env::args().collect();
+    // args[0] is the binary; args[1] (if present) is the folder path
+    if let Some(path) = args.get(1) {
+        let p = Path::new(path);
+        if p.is_dir() {
+            return Some(p.to_string_lossy().into_owned());
+        }
+    }
+    None
+}
+
+#[tauri::command]
 fn rename_file(old_path: String, new_path: String) -> Result<(), String> {
     if Path::new(&new_path).exists() {
         return Err("A file with that name already exists".to_string());
@@ -95,7 +108,8 @@ pub fn run() {
             list_directory,
             create_file,
             rename_file,
-            file_exists
+            file_exists,
+            get_initial_folder
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
