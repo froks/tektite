@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
-import { EditorView, keymap, drawSelection, highlightActiveLine, dropCursor } from '@codemirror/view'
-import { EditorState } from '@codemirror/state'
+import { EditorView, keymap, drawSelection, highlightActiveLine, dropCursor, Decoration } from '@codemirror/view'
+import { EditorState, StateEffect, StateField, RangeSetBuilder } from '@codemirror/state'
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { languages } from '@codemirror/language-data'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
@@ -9,6 +9,7 @@ import { HighlightStyle, LanguageDescription, syntaxHighlighting } from '@codemi
 import { tags as t } from '@lezer/highlight'
 import { php } from '@codemirror/lang-php'
 import { createMarkdownDecorations } from '../editor/markdownDecorations'
+import SearchPanel from './SearchPanel.vue'
 
 // Replace the language-data PHP entry (which calls php() without plain:true and
 // therefore expects a <?php opening tag) with one that uses plain:true so that
@@ -33,8 +34,146 @@ const emit = defineEmits<{
 }>()
 
 const editorEl = ref<HTMLElement | null>(null)
+const searchPanelRef = ref<InstanceType<typeof SearchPanel> | null>(null)
 let view: EditorView | null = null
 let internalUpdate = false
+
+// --- Search ---
+
+interface SearchMatch { from: number; to: number }
+interface SearchState { query: string; matches: SearchMatch[]; currentIndex: number }
+
+function findAllMatches(text: string, query: string): SearchMatch[] {
+  if (!query) return []
+  const lower = text.toLowerCase()
+  const lowerQuery = query.toLowerCase()
+  const len = lowerQuery.length
+  const matches: SearchMatch[] = []
+  let pos = 0
+  while (pos <= lower.length - len) {
+    const idx = lower.indexOf(lowerQuery, pos)
+    if (idx === -1) break
+    matches.push({ from: idx, to: idx + len })
+    pos = idx + 1
+  }
+  return matches
+}
+
+const setSearchEffect = StateEffect.define<SearchState | null>()
+
+const searchHighlightField = StateField.define<SearchState | null>({
+  create: () => null,
+  update(value, tr) {
+    for (const e of tr.effects) {
+      if (e.is(setSearchEffect)) return e.value
+    }
+    if (value?.query && tr.docChanged) {
+      const matches = findAllMatches(tr.state.doc.toString(), value.query)
+      const currentIndex = matches.length > 0 ? Math.min(value.currentIndex, matches.length - 1) : 0
+      return { ...value, matches, currentIndex }
+    }
+    return value
+  },
+  provide: field =>
+    EditorView.decorations.from(field, state => {
+      if (!state?.matches.length) return Decoration.none
+      const builder = new RangeSetBuilder<Decoration>()
+      for (let i = 0; i < state.matches.length; i++) {
+        const m = state.matches[i]
+        builder.add(m.from, m.to, Decoration.mark({
+          class: i === state.currentIndex ? 'search-match--active' : 'search-match',
+        }))
+      }
+      return builder.finish()
+    }),
+})
+
+const searchOpen = ref(false)
+const searchQuery = ref('')
+const searchMatchCount = ref(0)
+const searchCurrentIndex = ref(-1)
+
+function applySearchQuery(query: string, index = 0) {
+  if (!view) return
+  if (!query.trim()) {
+    view.dispatch({ effects: setSearchEffect.of(null) })
+    searchMatchCount.value = 0
+    searchCurrentIndex.value = -1
+    return
+  }
+  const matches = findAllMatches(view.state.doc.toString(), query)
+  const currentIndex = matches.length > 0 ? Math.min(index, matches.length - 1) : 0
+  const newState: SearchState | null = matches.length ? { query, matches, currentIndex } : null
+  const dispatchArgs: Parameters<EditorView['dispatch']>[0] = { effects: setSearchEffect.of(newState) }
+  if (matches[currentIndex]) {
+    dispatchArgs.selection = { anchor: matches[currentIndex].from }
+    dispatchArgs.scrollIntoView = true
+  }
+  view.dispatch(dispatchArgs)
+  searchMatchCount.value = matches.length
+  searchCurrentIndex.value = matches.length > 0 ? currentIndex : -1
+}
+
+function openSearch() {
+  const alreadyOpen = searchOpen.value
+  searchOpen.value = true
+  const selectedText = view && (() => {
+    const sel = view!.state.selection.main
+    if (!sel.empty) return view!.state.doc.sliceString(sel.from, sel.to)
+    return ''
+  })()
+  nextTick(() => {
+    const initial = alreadyOpen ? undefined : (selectedText || undefined)
+    searchPanelRef.value?.focus(initial)
+    if (initial) applySearchQuery(initial, 0)
+  })
+}
+
+function handleSearchQuery(query: string) {
+  searchQuery.value = query
+  applySearchQuery(query, 0)
+}
+
+function findNext() {
+  if (!view) return
+  const state = view.state.field(searchHighlightField)
+  if (!state?.matches.length) return
+  const nextIndex = (state.currentIndex + 1) % state.matches.length
+  const match = state.matches[nextIndex]
+  view.dispatch({
+    effects: setSearchEffect.of({ ...state, currentIndex: nextIndex }),
+    selection: { anchor: match.from },
+    scrollIntoView: true,
+  })
+  searchCurrentIndex.value = nextIndex
+}
+
+function findPrev() {
+  if (!view) return
+  const state = view.state.field(searchHighlightField)
+  if (!state?.matches.length) return
+  const prevIndex = (state.currentIndex - 1 + state.matches.length) % state.matches.length
+  const match = state.matches[prevIndex]
+  view.dispatch({
+    effects: setSearchEffect.of({ ...state, currentIndex: prevIndex }),
+    selection: { anchor: match.from },
+    scrollIntoView: true,
+  })
+  searchCurrentIndex.value = prevIndex
+}
+
+function closeSearch() {
+  searchOpen.value = false
+  searchQuery.value = ''
+  searchMatchCount.value = 0
+  searchCurrentIndex.value = -1
+  if (view) {
+    view.dispatch({ effects: setSearchEffect.of(null) })
+    view.focus()
+  }
+}
+
+defineExpose({ openSearch })
 
 const markdownDecorations = createMarkdownDecorations({
   currentFilePath: () => props.filePath ?? '',
@@ -287,6 +426,15 @@ const editorTheme = EditorView.theme({
     fontWeight: '700',
     borderBottom: '2px solid var(--border)',
   },
+  '.search-match': {
+    background: 'rgba(250, 179, 135, 0.3)',
+    borderRadius: '2px',
+  },
+  '.search-match--active': {
+    background: 'rgba(250, 179, 135, 0.65)',
+    borderRadius: '2px',
+    outline: '1px solid rgba(250, 179, 135, 0.9)',
+  },
 }, { dark: true })
 
 // Catppuccin-based syntax highlight style (works for both Mocha dark and Latte light
@@ -340,12 +488,18 @@ function createState(content: string) {
       markdown({ base: markdownLanguage, codeLanguages }),
       syntaxHighlighting(codeHighlightStyle),
       markdownDecorations,
+      searchHighlightField,
       EditorView.lineWrapping,
       keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
       editorTheme,
       EditorView.updateListener.of((update) => {
         if (update.docChanged && !internalUpdate) {
           emit('change', update.state.doc.toString())
+        }
+        if (update.docChanged && searchOpen.value) {
+          const state = update.state.field(searchHighlightField)
+          searchMatchCount.value = state?.matches.length ?? 0
+          searchCurrentIndex.value = state?.currentIndex ?? -1
         }
       }),
     ],
@@ -379,11 +533,15 @@ watch(
         state: createState(props.content),
         parent: editorEl.value,
       })
-      return
+    } else {
+      internalUpdate = true
+      view.setState(createState(props.content))
+      internalUpdate = false
     }
-    internalUpdate = true
-    view.setState(createState(props.content))
-    internalUpdate = false
+    // Re-apply search in new file if panel is open
+    if (searchOpen.value && searchQuery.value) {
+      applySearchQuery(searchQuery.value, 0)
+    }
   }
 )
 
@@ -414,7 +572,19 @@ watch(
     <div v-if="!filePath" class="editor-placeholder">
       <p>Open a folder and select a markdown file to start editing</p>
     </div>
-    <div v-else ref="editorEl" class="editor-container" />
+    <template v-else>
+      <SearchPanel
+        v-if="searchOpen"
+        ref="searchPanelRef"
+        :match-count="searchMatchCount"
+        :current-index="searchCurrentIndex"
+        @query="handleSearchQuery"
+        @next="findNext"
+        @prev="findPrev"
+        @close="closeSearch"
+      />
+      <div ref="editorEl" class="editor-container" />
+    </template>
   </div>
 </template>
 
@@ -425,6 +595,7 @@ watch(
   display: flex;
   flex-direction: column;
   background: var(--editor-bg);
+  position: relative;
 }
 
 .editor-container {

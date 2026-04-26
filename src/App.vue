@@ -4,6 +4,7 @@ import { invoke } from '@tauri-apps/api/core'
 import FileSidebar from './components/FileSidebar.vue'
 import MarkdownEditor from './components/MarkdownEditor.vue'
 
+const editorRef = ref<InstanceType<typeof MarkdownEditor> | null>(null)
 const activeFile = ref<string | null>(null)
 const rootPath = ref('')
 const fileContent = ref('')
@@ -65,11 +66,14 @@ async function saveCurrentFile() {
   }
 }
 
-// Keyboard shortcut Ctrl/Cmd+S
 function handleKeydown(e: KeyboardEvent) {
   if ((e.ctrlKey || e.metaKey) && e.key === 's') {
     e.preventDefault()
     saveCurrentFile()
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+    e.preventDefault()
+    editorRef.value?.openSearch()
   }
 }
 
@@ -97,6 +101,7 @@ const fileName = (path: string | null) => {
       </div>
 
       <MarkdownEditor
+        ref="editorRef"
         :content="fileContent"
         :file-path="activeFile"
         :root-path="rootPath"
