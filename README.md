@@ -7,7 +7,8 @@ A minimal Obsidian-style markdown editor for the desktop, built with Tauri v2, V
 ## Features
 
 - **Hybrid live preview** — bold, italic, strikethrough, headings, links, tables, and code blocks render in-place while you type. Syntax markers hide on inactive lines and reappear when your cursor moves there.
-- **File explorer** — open any folder, browse a tree of `.md` files and subdirectories. Sidebar is resizable by dragging and collapsible to a slim strip. Right-click any entry for "Open Containing Folder", "Copy Path", or "Rename". Filter the tree with the search bar at the bottom — parent folders auto-expand around matches.
+- **File explorer** — open any folder, browse a tree of `.md` files and subdirectories. Sidebar is resizable by dragging and collapsible to a slim strip. Right-click any entry for "New File", "New Folder", "Open Containing Folder", "Copy Path", or "Rename"; right-click empty space for the same create options. Filter the tree with the search bar at the bottom — parent folders auto-expand around matches.
+- **Live file watching** — the sidebar refreshes automatically when files or folders are created, deleted, or renamed externally. If the currently open file is modified outside the app (and has no unsaved edits), its content reloads in place without resetting the cursor.
 - **Search** — in-editor text search with match highlighting and prev/next navigation (Ctrl+F).
 - **Wiki-links** — `[[target]]` and `[[target|display]]` syntax supported. Broken links shown with a dashed underline.
 - **Fenced code blocks** — syntax-highlighted background, hidden fences when inactive, copy-to-clipboard button.
@@ -46,8 +47,8 @@ bun tauri build
 ```
 src/
   components/
-    FileSidebar.vue       # Resizable/collapsible sidebar, file tree, filter bar
-    FileTreeNode.vue      # Recursive tree node, inline rename, context menu
+    FileSidebar.vue       # Resizable/collapsible sidebar, file tree, filter bar, fs watcher
+    FileTreeNode.vue      # Recursive tree node, inline rename, context menu (new file/folder)
     MarkdownEditor.vue    # CodeMirror 6 setup, theme, keybindings
     SearchPanel.vue       # In-editor search UI (Ctrl+F)
   editor/
@@ -55,7 +56,7 @@ src/
     linkResolver.ts         # Wiki-link / relative link resolution
   App.vue                 # Root layout, sidebar resize/collapse, file load/save
 src-tauri/
-  src/lib.rs              # Rust commands: read/write/list/rename/exists
+  src/lib.rs              # Rust commands: read/write/list/rename/exists/watch
 ```
 
 ## Notes

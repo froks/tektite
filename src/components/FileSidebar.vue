@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, computed, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted, nextTick } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { open } from '@tauri-apps/plugin-dialog'
 
 interface FileEntry {
@@ -19,6 +20,7 @@ const emit = defineEmits<{
   fileRenamed: [oldPath: string, newPath: string]
   folderOpened: [path: string]
   toggleCollapse: []
+  externalChange: [path: string]
 }>()
 
 const rootPath = ref<string | null>(null)
@@ -28,13 +30,63 @@ const expandedDirs = ref<Set<string>>(new Set())
 const error = ref<string | null>(null)
 const filterText = ref('')
 
+// ── File system watcher ───────────────────────────────────────────────────────
+const dirReloadTimers = new Map<string, ReturnType<typeof setTimeout>>()
+const contentReloadTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+function fsParent(path: string): string {
+  const last = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))
+  return last >= 0 ? path.substring(0, last) : path
+}
+
+function scheduleReload(dir: string) {
+  if (dirReloadTimers.has(dir)) clearTimeout(dirReloadTimers.get(dir)!)
+  dirReloadTimers.set(dir, setTimeout(async () => {
+    dirReloadTimers.delete(dir)
+    await reloadDir(dir)
+  }, 200))
+}
+
+function scheduleContentReload(path: string) {
+  if (contentReloadTimers.has(path)) clearTimeout(contentReloadTimers.get(path)!)
+  contentReloadTimers.set(path, setTimeout(() => {
+    contentReloadTimers.delete(path)
+    emit('externalChange', path)
+  }, 200))
+}
+
+function handleFsChange(event: { payload: { kind: string; paths: string[] } }) {
+  const { kind, paths } = event.payload
+  for (const path of paths) {
+    const name = path.split(/[\\/]/).pop() ?? ''
+    if (name.startsWith('.')) continue
+    const parent = fsParent(path)
+    if (parent === rootPath.value || childrenMap.value.has(parent)) {
+      scheduleReload(parent)
+    }
+    if (kind === 'modified' && path.endsWith('.md')) {
+      scheduleContentReload(path)
+    }
+  }
+}
+
+let unlistenFsChange: (() => void) | null = null
+
 async function openFolderPath(path: string) {
+  // Clear any pending timers from the previous folder's watcher
+  for (const t of dirReloadTimers.values()) clearTimeout(t)
+  dirReloadTimers.clear()
+  for (const t of contentReloadTimers.values()) clearTimeout(t)
+  contentReloadTimers.clear()
+
   rootPath.value = path
   childrenMap.value = new Map()
   expandedDirs.value = new Set()
   filterText.value = ''
   await loadDirectory(path, true)
   emit('folderOpened', path)
+
+  invoke('start_watching', { path }).catch(console.error)
 }
 
 async function openFolder() {
@@ -45,8 +97,14 @@ async function openFolder() {
 }
 
 onMounted(async () => {
+  unlistenFsChange = await listen<{ kind: string; paths: string[] }>('fs-change', handleFsChange)
   const initial = await invoke<string | null>('get_initial_folder')
   if (initial) await openFolderPath(initial)
+})
+
+onUnmounted(() => {
+  unlistenFsChange?.()
+  invoke('stop_watching').catch(() => {})
 })
 
 async function loadDirectory(path: string, isRoot = false): Promise<FileEntry[]> {
@@ -158,12 +216,7 @@ async function renameEntry(entry: FileEntry, newName: string) {
   const newPath = `${parentPath}${sep}${newName}`
   try {
     await invoke('rename_file', { oldPath: entry.path, newPath })
-    const dirPath = parentPath || rootPath.value!
-    if (dirPath === rootPath.value) {
-      await loadDirectory(dirPath, true)
-    } else {
-      await loadDirectory(dirPath)
-    }
+    await reloadDir(parentPath || rootPath.value!)
     emit('fileRenamed', entry.path, newPath)
   } catch (e) {
     alert(String(e))
@@ -174,18 +227,67 @@ function handleRenameRequest(p: { entry: FileEntry; newName: string }) {
   renameEntry(p.entry, p.newName)
 }
 
-async function newFile() {
-  if (!rootPath.value) return
-  const name = prompt('File name (without .md):')
-  if (!name) return
-  const path = `${rootPath.value}/${name}.md`
-  try {
-    await invoke('create_file', { path })
-    await loadDirectory(rootPath.value, true)
-    emit('fileSelected', path)
-  } catch (e) {
-    alert(String(e))
+// ── New item dialog ───────────────────────────────────────────────────────────
+const newItemDialog = ref<{ mode: 'file' | 'folder'; targetDir: string } | null>(null)
+const newItemName = ref('')
+const newItemInput = ref<HTMLInputElement | null>(null)
+
+async function reloadDir(dir: string) {
+  if (dir === rootPath.value) {
+    await loadDirectory(dir, true)
+  } else {
+    await loadDirectory(dir)
   }
+}
+
+async function openNewItemDialog(mode: 'file' | 'folder', targetDir: string) {
+  newItemName.value = ''
+  newItemDialog.value = { mode, targetDir }
+  await nextTick()
+  newItemInput.value?.focus()
+}
+
+function cancelNewItem() {
+  newItemDialog.value = null
+}
+
+async function confirmNewItem() {
+  const dialog = newItemDialog.value
+  const name = newItemName.value.trim()
+  if (!name || !dialog) return
+  newItemDialog.value = null
+  if (dialog.mode === 'file') {
+    const path = `${dialog.targetDir}/${name}.md`
+    try {
+      await invoke('create_file', { path })
+      await reloadDir(dialog.targetDir)
+      emit('fileSelected', path)
+    } catch (e) { alert(String(e)) }
+  } else {
+    const path = `${dialog.targetDir}/${name}`
+    try {
+      await invoke('create_directory', { path })
+      await reloadDir(dialog.targetDir)
+    } catch (e) { alert(String(e)) }
+  }
+}
+
+function newFile() {
+  if (rootPath.value) openNewItemDialog('file', rootPath.value)
+}
+
+// ── Sidebar background context menu ──────────────────────────────────────────
+const sidebarCtxMenu = ref<{ x: number; y: number } | null>(null)
+
+function showSidebarContextMenu(e: MouseEvent) {
+  if (!rootPath.value) return
+  e.preventDefault()
+  sidebarCtxMenu.value = { x: e.clientX, y: e.clientY }
+  window.addEventListener('mousedown', dismissSidebarContextMenu, { once: true })
+}
+
+function dismissSidebarContextMenu() {
+  sidebarCtxMenu.value = null
 }
 
 const folderName = computed(() => {
@@ -222,7 +324,7 @@ const folderName = computed(() => {
     </div>
 
     <template v-else>
-      <div class="file-tree">
+      <div class="file-tree" @contextmenu.self="showSidebarContextMenu">
         <div v-if="filterResult && displayFiles.length === 0" class="filter-empty">
           No matches
         </div>
@@ -237,6 +339,8 @@ const folderName = computed(() => {
           @toggle-dir="toggleDir"
           @select-file="selectFile"
           @rename-request="handleRenameRequest"
+          @new-file-request="(dir: string) => openNewItemDialog('file', dir)"
+          @new-folder-request="(dir: string) => openNewItemDialog('folder', dir)"
         />
       </div>
 
@@ -259,6 +363,38 @@ const folderName = computed(() => {
       </div>
     </template>
   </aside>
+
+  <Teleport to="body">
+    <div v-if="newItemDialog" class="dialog-overlay" @mousedown.self="cancelNewItem">
+      <div class="dialog">
+        <div class="dialog-title">{{ newItemDialog.mode === 'file' ? 'New File' : 'New Folder' }}</div>
+        <input
+          ref="newItemInput"
+          v-model="newItemName"
+          class="dialog-input"
+          :placeholder="newItemDialog.mode === 'file' ? 'File name' : 'Folder name'"
+          spellcheck="false"
+          @keydown.enter.prevent="confirmNewItem"
+          @keydown.escape.prevent="cancelNewItem"
+        />
+        <div class="dialog-hint" v-if="newItemDialog.mode === 'file'">.md will be appended automatically</div>
+        <div class="dialog-actions">
+          <button class="dialog-btn dialog-btn--cancel" @click="cancelNewItem">Cancel</button>
+          <button class="dialog-btn dialog-btn--confirm" :disabled="!newItemName.trim()" @click="confirmNewItem">Create</button>
+        </div>
+      </div>
+    </div>
+
+    <div
+      v-if="sidebarCtxMenu"
+      class="sidebar-ctx-menu"
+      :style="{ top: sidebarCtxMenu.y + 'px', left: sidebarCtxMenu.x + 'px' }"
+      @mousedown.stop
+    >
+      <button class="sidebar-ctx-item" @mousedown.prevent="dismissSidebarContextMenu(); openNewItemDialog('file', rootPath!)">New File</button>
+      <button class="sidebar-ctx-item" @mousedown.prevent="dismissSidebarContextMenu(); openNewItemDialog('folder', rootPath!)">New Folder</button>
+    </div>
+  </Teleport>
 </template>
 
 <script lang="ts">
@@ -400,5 +536,130 @@ const folderName = computed(() => {
 .filter-clear:hover {
   background: var(--hover-bg);
   color: var(--text);
+}
+
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dialog {
+  background: var(--sidebar-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 20px;
+  width: 300px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.dialog-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.dialog-input {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.dialog-input:focus {
+  border-color: var(--accent);
+}
+
+.dialog-input::placeholder {
+  color: var(--text-muted);
+}
+
+.dialog-hint {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: -4px;
+}
+
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.dialog-btn {
+  border: none;
+  border-radius: 6px;
+  padding: 6px 14px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  font-weight: 500;
+  transition: opacity 0.1s;
+}
+
+.dialog-btn--cancel {
+  background: var(--hover-bg);
+  color: var(--text);
+}
+
+.dialog-btn--cancel:hover {
+  opacity: 0.8;
+}
+
+.dialog-btn--confirm {
+  background: var(--accent);
+  color: #fff;
+}
+
+.dialog-btn--confirm:hover:not(:disabled) {
+  opacity: 0.85;
+}
+
+.dialog-btn--confirm:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.sidebar-ctx-menu {
+  position: fixed;
+  z-index: 9999;
+  background: var(--sidebar-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.25);
+  min-width: 140px;
+}
+
+.sidebar-ctx-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text);
+  padding: 5px 10px;
+  border-radius: 4px;
+}
+
+.sidebar-ctx-item:hover {
+  background: var(--hover-bg);
 }
 </style>

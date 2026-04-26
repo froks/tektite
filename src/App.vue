@@ -100,6 +100,16 @@ async function saveCurrentFile() {
   }
 }
 
+async function handleExternalChange(path: string) {
+  if (path !== activeFile.value || isDirty.value) return
+  try {
+    const content = await invoke<string>('read_file', { path })
+    fileContent.value = content
+  } catch (e) {
+    console.error('Failed to reload externally changed file:', e)
+  }
+}
+
 function handleKeydown(e: KeyboardEvent) {
   if ((e.ctrlKey || e.metaKey) && e.key === 's') {
     e.preventDefault()
@@ -127,6 +137,7 @@ const fileName = (path: string | null) => {
         @file-renamed="handleFileRenamed"
         @folder-opened="handleFolderOpened"
         @toggle-collapse="toggleSidebar"
+        @external-change="handleExternalChange"
       />
       <div v-if="sidebarCollapsed" class="sidebar-strip" @click="toggleSidebar" title="Expand sidebar">
         <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor">

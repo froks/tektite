@@ -20,10 +20,20 @@ const emit = defineEmits<{
   toggleDir: [entry: FileEntry]
   selectFile: [entry: FileEntry]
   renameRequest: [payload: { entry: FileEntry; newName: string }]
+  newFileRequest: [dir: string]
+  newFolderRequest: [dir: string]
 }>()
 
 const isExpanded = computed(() => props.expandedDirs.has(props.entry.path))
 const children = computed(() => props.childrenMap.get(props.entry.path) ?? null)
+
+// Directory to create new items in: the dir itself for folders, parent for files.
+const targetDir = computed(() => {
+  if (props.entry.is_dir) return props.entry.path
+  const p = props.entry.path
+  const last = Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\'))
+  return last >= 0 ? p.substring(0, last) : p
+})
 
 // ── Inline rename ─────────────────────────────────────────────────────────────
 const isRenaming = ref(false)
@@ -86,6 +96,7 @@ const contextMenu = ref<{ x: number; y: number } | null>(null)
 
 function showContextMenu(e: MouseEvent) {
   e.preventDefault()
+  e.stopPropagation()
   contextMenu.value = { x: e.clientX, y: e.clientY }
   window.addEventListener('mousedown', dismissContextMenu, { once: true })
 }
@@ -107,6 +118,16 @@ async function contextOpenFolder() {
 async function contextCopyPath() {
   dismissContextMenu()
   await navigator.clipboard.writeText(props.entry.path)
+}
+
+function contextNewFile() {
+  dismissContextMenu()
+  emit('newFileRequest', targetDir.value)
+}
+
+function contextNewFolder() {
+  dismissContextMenu()
+  emit('newFolderRequest', targetDir.value)
 }
 
 defineExpose({ startRename })
@@ -159,6 +180,9 @@ defineExpose({ startRename })
         :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }"
         @mousedown.stop
       >
+        <button class="ctx-item" @mousedown.prevent="contextNewFile">New File</button>
+        <button class="ctx-item" @mousedown.prevent="contextNewFolder">New Folder</button>
+        <div class="ctx-separator" />
         <button class="ctx-item" @mousedown.prevent="contextOpenFolder">Open Containing Folder</button>
         <button class="ctx-item" @mousedown.prevent="contextCopyPath">Copy Path</button>
         <div class="ctx-separator" />
@@ -179,6 +203,8 @@ defineExpose({ startRename })
         @toggle-dir="emit('toggleDir', $event)"
         @select-file="emit('selectFile', $event)"
         @rename-request="emit('renameRequest', $event)"
+        @new-file-request="emit('newFileRequest', $event)"
+        @new-folder-request="emit('newFolderRequest', $event)"
       />
     </div>
   </div>

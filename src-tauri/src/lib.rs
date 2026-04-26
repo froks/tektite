@@ -1,6 +1,8 @@
 use std::fs;
 use std::path::Path;
+use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
+use tauri::Emitter;
 
 #[derive(Serialize, Deserialize)]
 pub struct FileEntry {
@@ -9,6 +11,14 @@ pub struct FileEntry {
     is_dir: bool,
     children: Option<Vec<FileEntry>>,
 }
+
+#[derive(Serialize, Clone)]
+struct FsChangeEvent {
+    kind: String,
+    paths: Vec<String>,
+}
+
+struct WatcherState(Mutex<Option<notify::RecommendedWatcher>>);
 
 #[tauri::command]
 fn read_file(path: String) -> Result<String, String> {
@@ -51,7 +61,6 @@ fn list_directory(path: String) -> Result<Vec<FileEntry>, String> {
     }
 
     result.sort_by(|a, b| {
-        // Directories first, then alphabetical
         match (a.is_dir, b.is_dir) {
             (true, false) => std::cmp::Ordering::Less,
             (false, true) => std::cmp::Ordering::Greater,
@@ -71,6 +80,14 @@ fn create_file(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn create_directory(path: String) -> Result<(), String> {
+    if Path::new(&path).exists() {
+        return Err("A folder with that name already exists".to_string());
+    }
+    fs::create_dir_all(&path).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn file_exists(path: String) -> bool {
     Path::new(&path).exists()
 }
@@ -78,7 +95,6 @@ fn file_exists(path: String) -> bool {
 #[tauri::command]
 fn get_initial_folder() -> Option<String> {
     let args: Vec<String> = std::env::args().collect();
-    // args[0] is the binary; args[1] (if present) is the folder path
     if let Some(path) = args.get(1) {
         let p = Path::new(path);
         if p.is_dir() {
@@ -96,9 +112,57 @@ fn rename_file(old_path: String, new_path: String) -> Result<(), String> {
     fs::rename(&old_path, &new_path).map_err(|e| e.to_string())
 }
 
+#[tauri::command]
+fn start_watching(
+    path: String,
+    app_handle: tauri::AppHandle,
+    state: tauri::State<WatcherState>,
+) -> Result<(), String> {
+    use notify::Watcher;
+
+    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+    *guard = None; // drop existing watcher
+
+    let app = app_handle.clone();
+    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        let event = match res {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+        let kind = match event.kind {
+            notify::EventKind::Create(_) => "created",
+            notify::EventKind::Remove(_) => "removed",
+            notify::EventKind::Modify(_) => "modified",
+            _ => return,
+        };
+        let paths: Vec<String> = event
+            .paths
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        let _ = app.emit("fs-change", FsChangeEvent { kind: kind.to_string(), paths });
+    })
+    .map_err(|e| e.to_string())?;
+
+    watcher
+        .watch(Path::new(&path), notify::RecursiveMode::Recursive)
+        .map_err(|e| e.to_string())?;
+
+    *guard = Some(watcher);
+    Ok(())
+}
+
+#[tauri::command]
+fn stop_watching(state: tauri::State<WatcherState>) -> Result<(), String> {
+    let mut guard = state.0.lock().map_err(|e| e.to_string())?;
+    *guard = None;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(WatcherState(Mutex::new(None)))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
@@ -107,9 +171,12 @@ pub fn run() {
             write_file,
             list_directory,
             create_file,
+            create_directory,
             rename_file,
             file_exists,
-            get_initial_folder
+            get_initial_folder,
+            start_watching,
+            stop_watching,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
