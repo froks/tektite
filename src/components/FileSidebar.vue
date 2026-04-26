@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import { open } from '@tauri-apps/plugin-dialog'
 
@@ -23,15 +23,16 @@ const emit = defineEmits<{
 
 const rootPath = ref<string | null>(null)
 const files = ref<FileEntry[]>([])
-// Map of path -> loaded children (reactive)
 const childrenMap = ref<Map<string, FileEntry[]>>(new Map())
 const expandedDirs = ref<Set<string>>(new Set())
 const error = ref<string | null>(null)
+const filterText = ref('')
 
 async function openFolderPath(path: string) {
   rootPath.value = path
   childrenMap.value = new Map()
   expandedDirs.value = new Set()
+  filterText.value = ''
   await loadDirectory(path, true)
   emit('folderOpened', path)
 }
@@ -63,14 +64,77 @@ async function loadDirectory(path: string, isRoot = false): Promise<FileEntry[]>
   }
 }
 
+// Recursively load all directories so the filter can search them.
+async function loadAllSubdirectories(entries: FileEntry[]) {
+  for (const entry of entries) {
+    if (!entry.is_dir) continue
+    if (!childrenMap.value.has(entry.path)) {
+      const children = await loadDirectory(entry.path)
+      await loadAllSubdirectories(children)
+    } else {
+      await loadAllSubdirectories(childrenMap.value.get(entry.path)!)
+    }
+  }
+}
+
+watch(filterText, async (text) => {
+  if (text.trim() && rootPath.value) {
+    await loadAllSubdirectories(files.value)
+  }
+})
+
+// Returns filtered root entries and populates outMap with filtered children.
+function buildFilteredTree(entries: FileEntry[], lower: string, outMap: Map<string, FileEntry[]>): FileEntry[] {
+  const result: FileEntry[] = []
+  for (const entry of entries) {
+    if (entry.is_dir) {
+      const children = childrenMap.value.get(entry.path) ?? []
+      if (entry.name.toLowerCase().includes(lower)) {
+        // Folder name matches — show it with all its children
+        outMap.set(entry.path, children)
+        result.push(entry)
+      } else {
+        const filteredChildren = buildFilteredTree(children, lower, outMap)
+        if (filteredChildren.length > 0) {
+          outMap.set(entry.path, filteredChildren)
+          result.push(entry)
+        }
+      }
+    } else {
+      if (entry.name.replace(/\.md$/, '').toLowerCase().includes(lower)) {
+        result.push(entry)
+      }
+    }
+  }
+  return result
+}
+
+const filterResult = computed(() => {
+  const text = filterText.value.trim()
+  if (!text) return null
+  const lower = text.toLowerCase()
+  const outMap = new Map<string, FileEntry[]>()
+  const filteredFiles = buildFilteredTree(files.value, lower, outMap)
+  return {
+    files: filteredFiles,
+    childrenMap: outMap,
+    expandedDirs: new Set(outMap.keys()),
+  }
+})
+
+const displayFiles = computed(() => filterResult.value?.files ?? files.value)
+const displayChildrenMap = computed(() => filterResult.value?.childrenMap ?? childrenMap.value)
+const displayExpandedDirs = computed(() => filterResult.value?.expandedDirs ?? expandedDirs.value)
+
 async function toggleDir(entry: FileEntry) {
   if (!entry.is_dir) return
+  // Ignore toggle while filtering — dirs are kept auto-expanded by filterResult
+  if (filterResult.value) return
   if (expandedDirs.value.has(entry.path)) {
     const next = new Set(expandedDirs.value)
     next.delete(entry.path)
     expandedDirs.value = next
   } else {
-    // Load children if not yet cached
     if (!childrenMap.value.has(entry.path)) {
       await loadDirectory(entry.path)
     }
@@ -94,7 +158,6 @@ async function renameEntry(entry: FileEntry, newName: string) {
   const newPath = `${parentPath}${sep}${newName}`
   try {
     await invoke('rename_file', { oldPath: entry.path, newPath })
-    // Reload the relevant directory
     const dirPath = parentPath || rootPath.value!
     if (dirPath === rootPath.value) {
       await loadDirectory(dirPath, true)
@@ -158,20 +221,43 @@ const folderName = computed(() => {
       <button class="open-btn" @click="openFolder">Open Folder</button>
     </div>
 
-    <div v-else class="file-tree">
-      <FileTreeNode
-        v-for="entry in files"
-        :key="entry.path"
-        :entry="entry"
-        :active-file="activeFile"
-        :expanded-dirs="expandedDirs"
-        :children-map="childrenMap"
-        :depth="0"
-        @toggle-dir="toggleDir"
-        @select-file="selectFile"
-        @rename-request="handleRenameRequest"
-      />
-    </div>
+    <template v-else>
+      <div class="file-tree">
+        <div v-if="filterResult && displayFiles.length === 0" class="filter-empty">
+          No matches
+        </div>
+        <FileTreeNode
+          v-for="entry in displayFiles"
+          :key="entry.path"
+          :entry="entry"
+          :active-file="activeFile"
+          :expanded-dirs="displayExpandedDirs"
+          :children-map="displayChildrenMap"
+          :depth="0"
+          @toggle-dir="toggleDir"
+          @select-file="selectFile"
+          @rename-request="handleRenameRequest"
+        />
+      </div>
+
+      <div class="sidebar-filter">
+        <svg class="filter-icon" viewBox="0 0 16 16" width="12" height="12" fill="currentColor">
+          <path d="M10.68 11.74a6 6 0 0 1-7.922-8.982 6 6 0 0 1 8.982 7.922l3.04 3.04a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215ZM11.5 7a4.499 4.499 0 1 0-8.997 0A4.499 4.499 0 0 0 11.5 7Z"/>
+        </svg>
+        <input
+          v-model="filterText"
+          class="filter-input"
+          placeholder="Filter..."
+          type="text"
+          spellcheck="false"
+        />
+        <button v-if="filterText" class="filter-clear" @click="filterText = ''" title="Clear filter">
+          <svg viewBox="0 0 16 16" width="10" height="10" fill="currentColor">
+            <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"/>
+          </svg>
+        </button>
+      </div>
+    </template>
   </aside>
 </template>
 
@@ -260,5 +346,59 @@ const folderName = computed(() => {
   flex: 1;
   overflow-y: auto;
   padding: 4px 0;
+}
+
+.filter-empty {
+  padding: 12px 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.sidebar-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.filter-icon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+
+.filter-input {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  outline: none;
+  font-size: 12px;
+  font-family: inherit;
+  color: var(--text);
+}
+
+.filter-input::placeholder {
+  color: var(--text-muted);
+}
+
+.filter-clear {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--text-muted);
+  padding: 2px;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.1s, color 0.1s;
+}
+
+.filter-clear:hover {
+  background: var(--hover-bg);
+  color: var(--text);
 }
 </style>
