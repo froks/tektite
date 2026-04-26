@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { invoke } from '@tauri-apps/api/core'
 import FileSidebar from './components/FileSidebar.vue'
 import MarkdownEditor from './components/MarkdownEditor.vue'
@@ -11,7 +11,41 @@ const fileContent = ref('')
 const isDirty = ref(false)
 const saveStatus = ref<'saved' | 'saving' | 'unsaved'>('saved')
 
+const sidebarWidth = ref(240)
+const sidebarCollapsed = ref(false)
+const isResizing = ref(false)
+
 let saveTimer: ReturnType<typeof setTimeout> | null = null
+let resizeStartX = 0
+let resizeStartWidth = 0
+
+const sidebarStyle = computed(() => ({
+  width: sidebarCollapsed.value ? '20px' : `${sidebarWidth.value}px`,
+  transition: isResizing.value ? 'none' : 'width 0.15s ease',
+}))
+
+function toggleSidebar() {
+  sidebarCollapsed.value = !sidebarCollapsed.value
+}
+
+function startResize(e: MouseEvent) {
+  isResizing.value = true
+  resizeStartX = e.clientX
+  resizeStartWidth = sidebarWidth.value
+  window.addEventListener('mousemove', onResize)
+  window.addEventListener('mouseup', stopResize)
+}
+
+function onResize(e: MouseEvent) {
+  const delta = e.clientX - resizeStartX
+  sidebarWidth.value = Math.max(120, Math.min(600, resizeStartWidth + delta))
+}
+
+function stopResize() {
+  isResizing.value = false
+  window.removeEventListener('mousemove', onResize)
+  window.removeEventListener('mouseup', stopResize)
+}
 
 function handleFolderOpened(path: string) {
   rootPath.value = path
@@ -85,11 +119,27 @@ const fileName = (path: string | null) => {
 
 <template>
   <div class="app" @keydown="handleKeydown" tabindex="-1">
-    <FileSidebar
-      :active-file="activeFile"
-      @file-selected="handleFileSelected"
-      @file-renamed="handleFileRenamed"
-      @folder-opened="handleFolderOpened"
+    <div class="sidebar-container" :style="sidebarStyle">
+      <FileSidebar
+        v-show="!sidebarCollapsed"
+        :active-file="activeFile"
+        @file-selected="handleFileSelected"
+        @file-renamed="handleFileRenamed"
+        @folder-opened="handleFolderOpened"
+        @toggle-collapse="toggleSidebar"
+      />
+      <div v-if="sidebarCollapsed" class="sidebar-strip" @click="toggleSidebar" title="Expand sidebar">
+        <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor">
+          <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"/>
+        </svg>
+      </div>
+    </div>
+
+    <div
+      v-show="!sidebarCollapsed"
+      class="resize-handle"
+      :class="{ resizing: isResizing }"
+      @mousedown.prevent="startResize"
     />
 
     <div class="main">
@@ -179,6 +229,44 @@ body {
   height: 100vh;
   overflow: hidden;
   outline: none;
+}
+
+.sidebar-container {
+  display: flex;
+  flex-shrink: 0;
+  overflow: hidden;
+  position: relative;
+}
+
+.sidebar-strip {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--border);
+  color: var(--text-muted);
+  transition: background 0.1s, color 0.1s;
+}
+
+.sidebar-strip:hover {
+  background: var(--hover-bg);
+  color: var(--text);
+}
+
+.resize-handle {
+  width: 4px;
+  flex-shrink: 0;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.15s;
+}
+
+.resize-handle:hover,
+.resize-handle.resizing {
+  background: var(--accent);
 }
 
 .main {

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, nextTick } from 'vue'
+import { revealItemInDir } from '@tauri-apps/plugin-opener'
 
 interface FileEntry {
   name: string
@@ -98,6 +99,16 @@ function contextRename() {
   startRename()
 }
 
+async function contextOpenFolder() {
+  dismissContextMenu()
+  await revealItemInDir(props.entry.path)
+}
+
+async function contextCopyPath() {
+  dismissContextMenu()
+  await navigator.clipboard.writeText(props.entry.path)
+}
+
 defineExpose({ startRename })
 </script>
 
@@ -148,6 +159,9 @@ defineExpose({ startRename })
         :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }"
         @mousedown.stop
       >
+        <button class="ctx-item" @mousedown.prevent="contextOpenFolder">Open Containing Folder</button>
+        <button class="ctx-item" @mousedown.prevent="contextCopyPath">Copy Path</button>
+        <div class="ctx-separator" />
         <button class="ctx-item" @mousedown.prevent="contextRename">Rename</button>
       </div>
     </Teleport>
@@ -264,5 +278,11 @@ defineExpose({ startRename })
 
 .ctx-item:hover {
   background: var(--hover-bg);
+}
+
+.ctx-separator {
+  height: 1px;
+  background: var(--border);
+  margin: 4px 0;
 }
 </style>

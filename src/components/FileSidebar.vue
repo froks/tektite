@@ -18,6 +18,7 @@ const emit = defineEmits<{
   fileSelected: [path: string]
   fileRenamed: [oldPath: string, newPath: string]
   folderOpened: [path: string]
+  toggleCollapse: []
 }>()
 
 const rootPath = ref<string | null>(null)
@@ -145,6 +146,11 @@ const folderName = computed(() => {
             <path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75Z"/>
           </svg>
         </button>
+        <button class="icon-btn" title="Collapse sidebar" @click="emit('toggleCollapse')">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+            <path d="M9.78 12.78a.75.75 0 0 1-1.06 0L4.47 8.53a.75.75 0 0 1 0-1.06l4.25-4.25a.75.75 0 0 1 1.06 1.06L6.06 8l3.72 3.72a.75.75 0 0 1 0 1.06Z"/>
+          </svg>
+        </button>
       </div>
     </div>
 
@@ -175,8 +181,8 @@ const folderName = computed(() => {
 
 <style scoped>
 .sidebar {
-  width: 240px;
-  min-width: 180px;
+  width: 100%;
+  height: 100%;
   background: var(--sidebar-bg);
   border-right: 1px solid var(--border);
   display: flex;
