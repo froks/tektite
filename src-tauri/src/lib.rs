@@ -172,6 +172,7 @@ pub fn run() {
             let icon_bytes = include_bytes!("../icons/128x128.png");
 
             // Set the GTK default window icon (affects taskbar on GTK-based DEs)
+            // and force dark theme variant for WebKit's prefers-color-scheme
             #[cfg(target_os = "linux")]
             {
                 use gtk::prelude::*;
@@ -181,6 +182,10 @@ pub fn run() {
                 loader.close()?;
                 let pixbuf = loader.pixbuf().expect("Failed to get pixbuf");
                 gtk::Window::set_default_icon(&pixbuf);
+
+                if let Some(settings) = gtk::Settings::default() {
+                    settings.set_gtk_application_prefer_dark_theme(true);
+                }
             }
 
             // Also set the individual window icon via Tauri API
