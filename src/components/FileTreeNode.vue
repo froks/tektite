@@ -45,7 +45,7 @@ async function startRename() {
   // Strip .md for display
   renameValue.value = props.entry.is_dir
     ? props.entry.name
-    : props.entry.name.replace(/\.md$/, '')
+    : props.entry.name.replace(/\.(md|pdf|txt|jpg|jpeg|png|gif|webp|avif|svg)$/, '')
   isRenaming.value = true
   await nextTick()
   renameInput.value?.focus()
@@ -56,8 +56,12 @@ function commitRename() {
   if (!isRenaming.value) return
   isRenaming.value = false
   const raw = renameValue.value.trim()
-  if (!raw || raw === props.entry.name.replace(/\.md$/, '')) return
-  const newName = props.entry.is_dir ? raw : raw.endsWith('.md') ? raw : `${raw}.md`
+  if (!raw || raw === props.entry.name.replace(/\.(md|pdf|txt|jpg|jpeg|png|gif|webp|avif|svg)$/, '')) return
+  const extMatch = props.entry.name.match(/\.(md|pdf|txt|jpg|jpeg|png|gif|webp|avif|svg)$/)
+  const ext = extMatch ? extMatch[0] : ''
+  const newName = props.entry.is_dir
+    ? raw
+    : (raw.match(/\.(md|pdf|txt|jpg|jpeg|png|gif|webp|avif|svg)$/) ? raw : `${raw}${ext}`)
   emit('renameRequest', { entry: props.entry, newName })
 }
 
@@ -172,6 +176,21 @@ defineExpose({ startRename })
           <path d="M6.22 3.22a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06l-4.25 4.25a.75.75 0 0 1-1.06-1.06L9.94 8 6.22 4.28a.75.75 0 0 1 0-1.06Z"/>
         </svg>
       </span>
+      <span v-else-if="entry.name.endsWith('.pdf')" class="file-icon file-icon--pdf">
+        <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor">
+          <path d="M3.75 0A1.75 1.75 0 0 0 2 1.75v12.5C2 15.216 2.784 16 3.75 16h8.5A1.75 1.75 0 0 0 14 14.25V4.664c0-.464-.184-.909-.513-1.237L10.573.513A1.75 1.75 0 0 0 9.336 0Zm0 1.5h5.586a.25.25 0 0 1 .177.073l2.914 2.914a.25.25 0 0 1 .073.177V14.25a.25.25 0 0 1-.25.25h-8.5a.25.25 0 0 1-.25-.25V1.75a.25.25 0 0 1 .25-.25ZM5 7.25a.75.75 0 0 1 .75-.75h.5a2 2 0 0 1 0 4h-.5v1a.75.75 0 0 1-1.5 0v-4.25Zm1.5.75v1.5h-.25V8Zm2.25-.75h.5a.75.75 0 0 1 .75.75v2.75a.75.75 0 0 1-.75.75h-.5a.75.75 0 0 1-.75-.75V8a.75.75 0 0 1 .75-.75Zm.25 3V8.5h-.5v1.75Zm2.25-3h1.25a.75.75 0 0 1 0 1.5H11.5v.5h.75a.75.75 0 0 1 0 1.5H11.5v.75a.75.75 0 0 1-1.5 0V8a.75.75 0 0 1 .75-.75Z"/>
+        </svg>
+      </span>
+      <span v-else-if="entry.name.endsWith('.txt')" class="file-icon file-icon--txt">
+        <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor">
+          <path d="M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 9 4.25V1.5Zm6.75.062V4.25c0 .138.112.25.25.25h2.688Z"/>
+        </svg>
+      </span>
+      <span v-else-if="['.jpg','.jpeg','.png','.gif','.webp','.avif','.svg'].some(e => entry.name.endsWith(e))" class="file-icon file-icon--img">
+        <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor">
+          <path d="M10.68 11.74a6 6 0 0 1-7.922-8.982A6 6 0 0 1 16 8v.5a2.5 2.5 0 0 1-5 0V8a4 4 0 1 0-.943 2.602l.028.032.007.007.004.004a.75.75 0 0 0 1.048-1.074Zm-4.18-2.24a2.5 2.5 0 1 1 5 0 2.5 2.5 0 0 1-5 0Z"/>
+        </svg>
+      </span>
       <span v-else class="file-icon">
         <svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor">
           <path d="M2 1.75C2 .784 2.784 0 3.75 0h6.586c.464 0 .909.184 1.237.513l2.914 2.914c.329.328.513.773.513 1.237v9.586A1.75 1.75 0 0 1 13.25 16h-9.5A1.75 1.75 0 0 1 2 14.25Zm1.75-.25a.25.25 0 0 0-.25.25v12.5c0 .138.112.25.25.25h9.5a.25.25 0 0 0 .25-.25V6h-2.75A1.75 1.75 0 0 1 9 4.25V1.5Zm6.75.062V4.25c0 .138.112.25.25.25h2.688Z"/>
@@ -190,7 +209,7 @@ defineExpose({ startRename })
         @click.stop
         @mousedown.stop
       />
-      <span v-else class="entry-name">{{ entry.name.replace(/\.md$/, '') }}</span>
+      <span v-else class="entry-name">{{ entry.name.replace(/\.(md|pdf|txt|jpg|jpeg|png|gif|webp|avif|svg)$/, '') }}</span>
     </div>
 
     <!-- Context menu -->
@@ -283,6 +302,18 @@ defineExpose({ startRename })
   color: var(--text-muted);
   flex-shrink: 0;
   margin-left: 2px;
+}
+
+.file-icon--pdf {
+  color: #f38ba8;
+}
+
+.file-icon--txt {
+  color: #a6e3a1;
+}
+
+.file-icon--img {
+  color: #89dceb;
 }
 
 .entry-name {

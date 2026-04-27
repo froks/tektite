@@ -65,7 +65,7 @@ function handleFsChange(event: { payload: { kind: string; paths: string[] } }) {
     if (parent === rootPath.value || childrenMap.value.has(parent)) {
       scheduleReload(parent)
     }
-    if (kind === 'modified' && path.endsWith('.md')) {
+    if (kind === 'modified' && (path.endsWith('.md') || path.endsWith('.txt'))) {
       scheduleContentReload(path)
     }
   }
@@ -160,7 +160,7 @@ function buildFilteredTree(entries: FileEntry[], lower: string, outMap: Map<stri
         }
       }
     } else {
-      if (entry.name.replace(/\.md$/, '').toLowerCase().includes(lower)) {
+      if (entry.name.replace(/\.(md|pdf|txt|jpg|jpeg|png|gif|webp|avif|svg)$/, '').toLowerCase().includes(lower)) {
         result.push(entry)
       }
     }

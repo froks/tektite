@@ -26,6 +26,27 @@ fn read_file(path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+fn read_file_base64(path: String) -> Result<String, String> {
+    use std::io::Read;
+    let mut file = fs::File::open(&path).map_err(|e| e.to_string())?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
+    // Encode to base64 using the standard alphabet
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as usize;
+        let b1 = if chunk.len() > 1 { chunk[1] as usize } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as usize } else { 0 };
+        out.push(TABLE[b0 >> 2] as char);
+        out.push(TABLE[((b0 & 3) << 4) | (b1 >> 4)] as char);
+        if chunk.len() > 1 { out.push(TABLE[((b1 & 0xf) << 2) | (b2 >> 6)] as char); } else { out.push('='); }
+        if chunk.len() > 2 { out.push(TABLE[b2 & 0x3f] as char); } else { out.push('='); }
+    }
+    Ok(out)
+}
+
+#[tauri::command]
 fn write_file(path: String, content: String) -> Result<(), String> {
     fs::write(&path, content).map_err(|e| e.to_string())
 }
@@ -47,8 +68,13 @@ fn list_directory(path: String) -> Result<Vec<FileEntry>, String> {
             continue;
         }
 
-        // Only include .md files and directories
-        if !is_dir && !name.ends_with(".md") {
+        // Only include supported file types and directories
+        let is_image = name.ends_with(".jpg") || name.ends_with(".jpeg")
+            || name.ends_with(".png") || name.ends_with(".gif")
+            || name.ends_with(".webp") || name.ends_with(".avif")
+            || name.ends_with(".svg");
+        if !is_dir && !name.ends_with(".md") && !name.ends_with(".pdf")
+            && !name.ends_with(".txt") && !is_image {
             continue;
         }
 
@@ -197,6 +223,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             read_file,
+            read_file_base64,
             write_file,
             list_directory,
             create_file,

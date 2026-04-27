@@ -4,8 +4,24 @@ import { invoke } from '@tauri-apps/api/core'
 import FileSidebar from './components/FileSidebar.vue'
 import MarkdownEditor from './components/MarkdownEditor.vue'
 import TabBar, { type Tab } from './components/TabBar.vue'
+import PdfViewer from './components/PdfViewer.vue'
+import ImageViewer from './components/ImageViewer.vue'
 
 const editorRef = ref<InstanceType<typeof MarkdownEditor> | null>(null)
+const pdfRef = ref<InstanceType<typeof PdfViewer> | null>(null)
+
+// ── File type helper ──────────────────────────────────────────────────────────
+const IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif', '.svg']
+
+function fileType(path: string | null): 'markdown' | 'pdf' | 'text' | 'image' | null {
+  if (!path) return null
+  if (path.endsWith('.pdf')) return 'pdf'
+  if (path.endsWith('.txt')) return 'text'
+  if (IMAGE_EXTS.some(ext => path.endsWith(ext))) return 'image'
+  return 'markdown'
+}
+
+const activeFileType = computed(() => fileType(activeFile.value))
 
 // ── Tab state ─────────────────────────────────────────────────────────────────
 const tabs = ref<Tab[]>([])
@@ -42,10 +58,12 @@ async function openFileInTab(path: string, newTab: boolean) {
   }
 
   let content = ''
-  try {
-    content = await invoke<string>('read_file', { path })
-  } catch (e) {
-    console.error('Failed to read file:', e)
+  if (fileType(path) !== 'pdf' && fileType(path) !== 'image') {
+    try {
+      content = await invoke<string>('read_file', { path })
+    } catch (e) {
+      console.error('Failed to read file:', e)
+    }
   }
 
   if (!newTab && activeTabId.value) {
@@ -86,16 +104,20 @@ async function activateTab(id: string) {
   activeTabId.value = id
   const tab = tabs.value.find(t => t.id === id)
   if (tab) {
-    const cached = tabContents.get(id)
-    if (cached !== undefined) {
-      fileContent.value = cached
+    if (fileType(tab.path) === 'pdf' || fileType(tab.path) === 'image') {
+      fileContent.value = ''
     } else {
-      try {
-        fileContent.value = await invoke<string>('read_file', { path: tab.path })
-        tabContents.set(id, fileContent.value)
-      } catch (e) {
-        console.error('Failed to read file:', e)
-        fileContent.value = ''
+      const cached = tabContents.get(id)
+      if (cached !== undefined) {
+        fileContent.value = cached
+      } else {
+        try {
+          fileContent.value = await invoke<string>('read_file', { path: tab.path })
+          tabContents.set(id, fileContent.value)
+        } catch (e) {
+          console.error('Failed to read file:', e)
+          fileContent.value = ''
+        }
       }
     }
   }
@@ -185,7 +207,7 @@ async function handleFileSelected(path: string, newTab = false) {
 
 async function handleExternalChange(path: string) {
   const tab = tabs.value.find(t => t.path === path)
-  if (!tab || tab.isDirty) return
+  if (!tab || tab.isDirty || fileType(path) === 'pdf' || fileType(path) === 'image') return
   try {
     const content = await invoke<string>('read_file', { path })
     tabContents.set(tab.id, content)
@@ -246,7 +268,11 @@ function handleKeydown(e: KeyboardEvent) {
   }
   if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
     e.preventDefault()
-    editorRef.value?.openSearch()
+    if (activeFileType.value === 'pdf') {
+      pdfRef.value?.openSearch()
+    } else {
+      editorRef.value?.openSearch()
+    }
   }
   if ((e.ctrlKey || e.metaKey) && e.key === 'w') {
     e.preventDefault()
@@ -305,12 +331,22 @@ const saveStatus = computed(() => {
       </div>
 
       <MarkdownEditor
+        v-if="activeFileType === 'markdown' || activeFileType === 'text'"
         ref="editorRef"
         :content="fileContent"
         :file-path="activeFile"
         :root-path="rootPath"
         @change="handleEditorChange"
         @navigate="handleNavigate"
+      />
+      <PdfViewer
+        v-else-if="activeFileType === 'pdf'"
+        ref="pdfRef"
+        :file-path="activeFile"
+      />
+      <ImageViewer
+        v-else-if="activeFileType === 'image'"
+        :file-path="activeFile"
       />
     </div>
   </div>
