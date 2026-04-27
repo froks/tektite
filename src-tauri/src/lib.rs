@@ -166,6 +166,30 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            use tauri::Manager;
+
+            let icon_bytes = include_bytes!("../icons/128x128.png");
+
+            // Set the GTK default window icon (affects taskbar on GTK-based DEs)
+            #[cfg(target_os = "linux")]
+            {
+                use gtk::prelude::*;
+                use gtk::gdk_pixbuf::PixbufLoader;
+                let loader = PixbufLoader::with_type("png")?;
+                loader.write(icon_bytes)?;
+                loader.close()?;
+                let pixbuf = loader.pixbuf().expect("Failed to get pixbuf");
+                gtk::Window::set_default_icon(&pixbuf);
+            }
+
+            // Also set the individual window icon via Tauri API
+            let window = app.get_webview_window("main").unwrap();
+            let icon = tauri::image::Image::from_bytes(icon_bytes)?;
+            window.set_icon(icon)?;
+
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             read_file,
             write_file,
