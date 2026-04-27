@@ -17,6 +17,7 @@ defineProps<{
 
 const emit = defineEmits<{
   fileSelected: [path: string]
+  fileSelectedNewTab: [path: string]
   fileRenamed: [oldPath: string, newPath: string]
   folderOpened: [path: string]
   toggleCollapse: []
@@ -208,6 +209,12 @@ function selectFile(entry: FileEntry) {
   }
 }
 
+function selectFileNewTab(entry: FileEntry) {
+  if (!entry.is_dir) {
+    emit('fileSelectedNewTab', entry.path)
+  }
+}
+
 async function renameEntry(entry: FileEntry, newName: string) {
   const oldPath = entry.path
   const sep = oldPath.includes('\\') ? '\\' : '/'
@@ -338,6 +345,7 @@ const folderName = computed(() => {
           :depth="0"
           @toggle-dir="toggleDir"
           @select-file="selectFile"
+          @select-file-new-tab="selectFileNewTab"
           @rename-request="handleRenameRequest"
           @new-file-request="(dir: string) => openNewItemDialog('file', dir)"
           @new-folder-request="(dir: string) => openNewItemDialog('folder', dir)"

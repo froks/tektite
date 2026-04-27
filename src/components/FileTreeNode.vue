@@ -19,6 +19,7 @@ const props = defineProps<{
 const emit = defineEmits<{
   toggleDir: [entry: FileEntry]
   selectFile: [entry: FileEntry]
+  selectFileNewTab: [entry: FileEntry]
   renameRequest: [payload: { entry: FileEntry; newName: string }]
   newFileRequest: [dir: string]
   newFolderRequest: [dir: string]
@@ -68,7 +69,9 @@ function cancelRename() {
 let clickTimer: ReturnType<typeof setTimeout> | null = null
 let lastClickTime = 0
 
-function handleClick(_e: MouseEvent) {
+function handleClick(e: MouseEvent) {
+  // Middle-click is handled by handleAuxClick; ignore it here
+  if (e.button !== 0) return
   if (props.entry.is_dir) {
     emit('toggleDir', props.entry)
     return
@@ -91,6 +94,13 @@ function handleClick(_e: MouseEvent) {
   }
 }
 
+function handleAuxClick(e: MouseEvent) {
+  if (e.button === 1 && !props.entry.is_dir) {
+    e.preventDefault()
+    emit('selectFileNewTab', props.entry)
+  }
+}
+
 // ── Context menu ──────────────────────────────────────────────────────────────
 const contextMenu = ref<{ x: number; y: number } | null>(null)
 
@@ -108,6 +118,16 @@ function dismissContextMenu() {
 function contextRename() {
   dismissContextMenu()
   startRename()
+}
+
+function contextOpen() {
+  dismissContextMenu()
+  emit('selectFile', props.entry)
+}
+
+function contextOpenNewTab() {
+  dismissContextMenu()
+  emit('selectFileNewTab', props.entry)
 }
 
 async function contextOpenFolder() {
@@ -143,6 +163,7 @@ defineExpose({ startRename })
       }"
       :style="{ paddingLeft: `${8 + depth * 14}px` }"
       @click="handleClick"
+      @auxclick="handleAuxClick"
       @contextmenu="showContextMenu"
     >
       <!-- chevron for dirs -->
@@ -180,6 +201,11 @@ defineExpose({ startRename })
         :style="{ top: contextMenu.y + 'px', left: contextMenu.x + 'px' }"
         @mousedown.stop
       >
+        <template v-if="!entry.is_dir">
+          <button class="ctx-item" @mousedown.prevent="contextOpen">Open</button>
+          <button class="ctx-item" @mousedown.prevent="contextOpenNewTab">Open in New Tab</button>
+          <div class="ctx-separator" />
+        </template>
         <button class="ctx-item" @mousedown.prevent="contextNewFile">New File</button>
         <button class="ctx-item" @mousedown.prevent="contextNewFolder">New Folder</button>
         <div class="ctx-separator" />
@@ -202,6 +228,7 @@ defineExpose({ startRename })
         :depth="depth + 1"
         @toggle-dir="emit('toggleDir', $event)"
         @select-file="emit('selectFile', $event)"
+        @select-file-new-tab="emit('selectFileNewTab', $event)"
         @rename-request="emit('renameRequest', $event)"
         @new-file-request="emit('newFileRequest', $event)"
         @new-folder-request="emit('newFolderRequest', $event)"
