@@ -31,6 +31,12 @@ A minimal Obsidian-style markdown editor for the desktop, built with Tauri v2, V
 
 **Prerequisites:** [Rust](https://rustup.rs), [Bun](https://bun.sh), and the [Tauri v2 prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS.
 
+On Debian/Ubuntu, install the required system libraries:
+
+```bash
+sudo apt install libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libgdk-pixbuf-2.0-dev libjavascriptcoregtk-4.1-dev libsoup-3.0-dev
+```
+
 ```bash
 bun install
 bun tauri dev
