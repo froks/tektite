@@ -26,6 +26,9 @@
     "targets": "all",
     "publisher": "Florian Roks",
     "shortDescription": "A minimal markdown editor",
+    "resources": {
+      "resources/plantuml.jar": "resources/plantuml.jar"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/64x64.png",

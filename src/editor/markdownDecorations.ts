@@ -280,6 +280,118 @@ function collectInternalLinkPaths(
   return paths
 }
 
+// ─── PlantUML widget ──────────────────────────────────────────────────────────
+
+/** Module-level cache: source string → base64-encoded render result */
+const plantumlCache = new Map<string, string>()
+
+/**
+ * Parses the optional format specifier from the opening fence line.
+ *
+ * Supported syntax:
+ *   ```plantuml           → 'svg' (default)
+ *   ```plantuml png       → 'png'
+ *   ```plantuml {format=eps}  → 'eps'
+ */
+function parsePlantumlFormat(fenceLine: string): string {
+  const after = fenceLine.replace(/^`+\s*plantuml\s*/i, '').trim()
+  if (!after) return 'svg'
+  const braceMatch = after.match(/\{[^}]*format\s*=\s*(\w+)/)
+  if (braceMatch) return braceMatch[1].toLowerCase()
+  return after.split(/\s+/)[0].toLowerCase() || 'svg'
+}
+
+class PlantUmlWidget extends WidgetType {
+  constructor(
+    private readonly source: string,
+    private readonly format: string,
+    private readonly blockFrom: number,
+    private readonly dispatchEdit: (from: number) => void,
+  ) { super() }
+
+  eq(other: PlantUmlWidget): boolean {
+    return other.source === this.source && other.format === this.format
+  }
+
+  toDOM(): HTMLElement {
+    const wrap = document.createElement('div')
+    wrap.className = 'md-plantuml-widget'
+
+    const cached = plantumlCache.get(this.source + '\x00' + this.format)
+    if (cached) {
+      this.renderResult(wrap, cached)
+    } else {
+      const loading = document.createElement('div')
+      loading.className = 'md-plantuml-loading'
+      loading.textContent = 'Rendering diagram…'
+      wrap.appendChild(loading)
+      this.addEditButton(wrap)
+
+      invoke<string>('render_plantuml', {
+        source: this.source,
+        options: { format: this.format },
+      }).then(b64 => {
+        plantumlCache.set(this.source + '\x00' + this.format, b64)
+        wrap.innerHTML = ''
+        this.renderResult(wrap, b64)
+      }).catch((err: unknown) => {
+        wrap.innerHTML = ''
+        const errEl = document.createElement('div')
+        errEl.className = 'md-plantuml-error'
+        errEl.textContent = `PlantUML error: ${err}`
+        wrap.appendChild(errEl)
+        this.addEditButton(wrap)
+      })
+    }
+
+    return wrap
+  }
+
+  private renderResult(wrap: HTMLElement, b64: string) {
+    if (this.format === 'svg') {
+      const svgText = atob(b64)
+      const svgWrap = document.createElement('div')
+      svgWrap.className = 'md-plantuml-svg'
+      svgWrap.innerHTML = svgText
+      wrap.appendChild(svgWrap)
+    } else if (this.format === 'txt') {
+      const pre = document.createElement('pre')
+      pre.className = 'md-plantuml-ascii'
+      pre.textContent = atob(b64)
+      wrap.appendChild(pre)
+    } else {
+      const mimeMap: Record<string, string> = {
+        png: 'image/png',
+        eps: 'image/eps',
+        pdf: 'application/pdf',
+      }
+      const mime = mimeMap[this.format] ?? `image/${this.format}`
+      const img = document.createElement('img')
+      img.className = 'md-plantuml-img'
+      img.src = `data:${mime};base64,${b64}`
+      img.alt = 'PlantUML diagram'
+      wrap.appendChild(img)
+    }
+    this.addEditButton(wrap)
+  }
+
+  private addEditButton(wrap: HTMLElement) {
+    const btn = document.createElement('button')
+    btn.className = 'md-plantuml-edit-btn'
+    btn.title = 'Edit diagram source'
+    btn.innerHTML = `<svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+      <path d="M11.013 1.427a1.75 1.75 0 0 1 2.474 0l1.086 1.086a1.75 1.75 0 0 1 0 2.474l-8.61 8.61c-.21.21-.47.364-.756.445l-3.251.93a.75.75 0 0 1-.927-.928l.929-3.25c.081-.286.235-.547.445-.757l8.61-8.61Zm.176 4.823L9.75 4.81l-6.286 6.287a.253.253 0 0 0-.064.108l-.558 1.953 1.953-.558a.253.253 0 0 0 .108-.064Zm1.238-3.763a.25.25 0 0 0-.354 0L10.811 3.75l1.439 1.44 1.263-1.263a.25.25 0 0 0 0-.354Z"/>
+    </svg>`
+    btn.addEventListener('mousedown', e => {
+      e.preventDefault()
+      this.dispatchEdit(this.blockFrom)
+    })
+    wrap.appendChild(btn)
+  }
+
+  ignoreEvent() { return false }
+}
+
 // ─── Main decoration builder ──────────────────────────────────────────────────
 
 function buildDecorations(
@@ -288,6 +400,7 @@ function buildDecorations(
   currentFilePath: string,
   rootPath: string,
   onNavigate: (path: string) => void,
+  getView: () => EditorView | null,
 ): DecorationSet {
   try {
     const decs: Range<Decoration>[] = []
@@ -351,9 +464,30 @@ function buildDecorations(
           const closeFenceLine = doc.lineAt(to)
           const active = isActiveBlock(from)
 
-          decs.push(codeFenceLine.range(openFenceLine.from))
+          const infoNode = node.node.getChild('CodeInfo')
+          const langTag = infoNode ? src.slice(infoNode.from, infoNode.to).trim().toLowerCase() : ''
           const codeTextNode = node.node.getChild('CodeText')
           const codeText = codeTextNode ? src.slice(codeTextNode.from, codeTextNode.to) : ''
+
+          // ── PlantUML block: render as diagram when not active ─────────────
+          if (langTag === 'plantuml' && !active) {
+            const format = parsePlantumlFormat(src.slice(openFenceLine.from, openFenceLine.to))
+            const lineFrom = openFenceLine.from
+            const lineTo = closeFenceLine.to
+            const dispatchEdit = (blockFrom: number) => {
+              const view = getView()
+              if (view) view.dispatch({ selection: { anchor: blockFrom + 1 } })
+            }
+            decs.push(
+              Decoration.replace({
+                widget: new PlantUmlWidget(codeText.trim(), format, from, dispatchEdit),
+                block: true,
+              }).range(lineFrom, lineTo),
+            )
+            return false
+          }
+
+          decs.push(codeFenceLine.range(openFenceLine.from))
           pushWidget(new CopyButtonWidget(codeText), openFenceLine.to)
 
           if (closeFenceLine.number !== openFenceLine.number) {
@@ -600,6 +734,7 @@ export interface MarkdownDecorationsOptions {
   currentFilePath: () => string
   rootPath: () => string
   onNavigate: (path: string) => void
+  getView: () => EditorView | null
 }
 
 export function createMarkdownDecorations(options: MarkdownDecorationsOptions) {
@@ -628,6 +763,7 @@ export function createMarkdownDecorations(options: MarkdownDecorationsOptions) {
         options.currentFilePath(),
         options.rootPath(),
         options.onNavigate,
+        options.getView,
       )
     },
     update(deco, tr) {
@@ -643,6 +779,7 @@ export function createMarkdownDecorations(options: MarkdownDecorationsOptions) {
           options.currentFilePath(),
           options.rootPath(),
           options.onNavigate,
+          options.getView,
         )
       }
       return deco.map(tr.changes)
