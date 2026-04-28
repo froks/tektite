@@ -1,8 +1,8 @@
 [package]
 name = "tektite"
 version = "0.6.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "A minimal markdown editor"
+authors = ["Florian Roks"]
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html

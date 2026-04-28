@@ -2,6 +2,8 @@
   "name": "tektite",
   "private": true,
   "version": "0.6.0",
+  "description": "A minimal markdown editor",
+  "author": "Florian Roks",
   "type": "module",
   "scripts": {
     "dev": "vite",
