@@ -48,13 +48,34 @@ fn render_plantuml(
         .resource_dir()
         .map_err(|e| format!("Cannot resolve resource dir: {e}"))?;
 
-    let jar_path = resource_dir.join("resources").join("plantuml.jar");
-    if !jar_path.exists() {
-        return Err(format!(
-            "plantuml.jar not found at {}",
-            jar_path.display()
-        ));
-    }
+    // Tauri on Windows sometimes returns an extended-length path (\\?\C:\...).
+    // Java cannot handle that prefix in -jar arguments, so strip it if present.
+    let resource_dir = {
+        let s = resource_dir.to_string_lossy();
+        if let Some(stripped) = s.strip_prefix(r"\\?\") {
+            std::path::PathBuf::from(stripped.to_string())
+        } else {
+            resource_dir
+        }
+    };
+
+    // In dev mode resource_dir is src-tauri/ and resources are under resources/.
+    // In production the resources are extracted directly into resource_dir (no extra subfolder).
+    let jar_path = {
+        let candidate_dev  = resource_dir.join("resources").join("plantuml.jar");
+        let candidate_prod = resource_dir.join("plantuml.jar");
+        if candidate_dev.exists() {
+            candidate_dev
+        } else if candidate_prod.exists() {
+            candidate_prod
+        } else {
+            return Err(format!(
+                "plantuml.jar not found (tried {} and {})",
+                candidate_dev.display(),
+                candidate_prod.display(),
+            ));
+        }
+    };
 
     // Pick JRE binary for the current platform
     let jre_dir = match std::env::consts::OS {
