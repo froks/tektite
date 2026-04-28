@@ -48,23 +48,6 @@ To build a release binary:
 bun tauri build
 ```
 
-## Project structure
-
-```
-src/
-  components/
-    FileSidebar.vue       # Resizable/collapsible sidebar, file tree, filter bar, fs watcher
-    FileTreeNode.vue      # Recursive tree node, inline rename, context menu (new file/folder)
-    MarkdownEditor.vue    # CodeMirror 6 setup, theme, keybindings
-    SearchPanel.vue       # In-editor search UI (Ctrl+F)
-  editor/
-    markdownDecorations.ts  # Lezer-tree decoration engine
-    linkResolver.ts         # Wiki-link / relative link resolution
-  App.vue                 # Root layout, sidebar resize/collapse, file load/save
-src-tauri/
-  src/lib.rs              # Rust commands: read/write/list/rename/exists/watch
-```
-
 ## Notes
 
 Decoration rendering walks the Lezer syntax tree (`syntaxTree` from `@codemirror/language`) rather than using regexes over raw text. This gives correctly nested, positionally exact decorations with no overlap issues.
