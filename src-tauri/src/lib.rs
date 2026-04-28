@@ -119,7 +119,8 @@ fn file_exists(path: String) -> bool {
 }
 
 #[tauri::command]
-fn get_initial_folder() -> Option<String> {
+fn get_initial_folder(app_handle: tauri::AppHandle) -> Option<String> {
+    // CLI argument takes priority
     let args: Vec<String> = std::env::args().collect();
     if let Some(path) = args.get(1) {
         let p = Path::new(path);
@@ -127,7 +128,31 @@ fn get_initial_folder() -> Option<String> {
             return Some(p.to_string_lossy().into_owned());
         }
     }
-    None
+    // Fall back to last saved folder
+    get_last_folder_path(&app_handle)
+        .and_then(|p| fs::read_to_string(p).ok())
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get("last_folder").and_then(|f| f.as_str()).map(|s| s.to_owned()))
+        .filter(|p| Path::new(p).is_dir())
+}
+
+fn get_last_folder_path(app_handle: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+    use tauri::Manager;
+    app_handle.path().app_config_dir().ok().map(|d| d.join("settings.json"))
+}
+
+#[tauri::command]
+fn set_last_folder(path: String, app_handle: tauri::AppHandle) -> Result<(), String> {
+    use tauri::Manager;
+    let config_dir = app_handle.path().app_config_dir().map_err(|e| e.to_string())?;
+    fs::create_dir_all(&config_dir).map_err(|e| e.to_string())?;
+    let settings_path = config_dir.join("settings.json");
+    let json = if path.is_empty() {
+        serde_json::json!({})
+    } else {
+        serde_json::json!({ "last_folder": path })
+    };
+    fs::write(settings_path, json.to_string()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -231,6 +256,7 @@ pub fn run() {
             rename_file,
             file_exists,
             get_initial_folder,
+            set_last_folder,
             start_watching,
             stop_watching,
         ])

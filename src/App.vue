@@ -192,6 +192,14 @@ function handleFolderOpened(path: string) {
   rootPath.value = path
 }
 
+function handleFolderClosed() {
+  rootPath.value = ''
+  tabs.value = []
+  tabContents.clear()
+  activeTabId.value = null
+  fileContent.value = ''
+}
+
 function handleFileRenamed(oldPath: string, newPath: string) {
   for (const tab of tabs.value) {
     if (tab.path === oldPath) {
@@ -298,6 +306,7 @@ const saveStatus = computed(() => {
         @file-selected-new-tab="handleFileSelected($event, true)"
         @file-renamed="handleFileRenamed"
         @folder-opened="handleFolderOpened"
+        @folder-closed="handleFolderClosed"
         @toggle-collapse="toggleSidebar"
         @external-change="handleExternalChange"
       />

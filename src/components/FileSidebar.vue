@@ -20,6 +20,7 @@ const emit = defineEmits<{
   fileSelectedNewTab: [path: string]
   fileRenamed: [oldPath: string, newPath: string]
   folderOpened: [path: string]
+  folderClosed: []
   toggleCollapse: []
   externalChange: [path: string]
 }>()
@@ -87,7 +88,23 @@ async function openFolderPath(path: string) {
   await loadDirectory(path, true)
   emit('folderOpened', path)
 
+  invoke('set_last_folder', { path }).catch(console.error)
   invoke('start_watching', { path }).catch(console.error)
+}
+
+function closeFolder() {
+  for (const t of dirReloadTimers.values()) clearTimeout(t)
+  dirReloadTimers.clear()
+  for (const t of contentReloadTimers.values()) clearTimeout(t)
+  contentReloadTimers.clear()
+  rootPath.value = null
+  files.value = []
+  childrenMap.value = new Map()
+  expandedDirs.value = new Set()
+  filterText.value = ''
+  invoke('stop_watching').catch(() => {})
+  invoke('set_last_folder', { path: '' }).catch(console.error)
+  emit('folderClosed')
 }
 
 async function openFolder() {
@@ -316,6 +333,11 @@ const folderName = computed(() => {
         <button class="icon-btn" title="Open folder" @click="openFolder">
           <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
             <path d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75Z"/>
+          </svg>
+        </button>
+        <button class="icon-btn" title="Close folder" @click="closeFolder" v-if="rootPath">
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+            <path d="M3.72 3.72a.75.75 0 0 1 1.06 0L8 6.94l3.22-3.22a.749.749 0 0 1 1.275.326.749.749 0 0 1-.215.734L9.06 8l3.22 3.22a.749.749 0 0 1-.326 1.275.749.749 0 0 1-.734-.215L8 9.06l-3.22 3.22a.751.751 0 0 1-1.042-.018.751.751 0 0 1-.018-1.042L6.94 8 3.72 4.78a.75.75 0 0 1 0-1.06Z"/>
           </svg>
         </button>
         <button class="icon-btn" title="Collapse sidebar" @click="emit('toggleCollapse')">
