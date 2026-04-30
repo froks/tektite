@@ -305,6 +305,7 @@ const saveStatus = computed(() => {
         @file-selected="handleFileSelected($event, false)"
         @file-selected-new-tab="handleFileSelected($event, true)"
         @file-renamed="handleFileRenamed"
+        @file-moved="handleFileRenamed"
         @folder-opened="handleFolderOpened"
         @folder-closed="handleFolderClosed"
         @toggle-collapse="toggleSidebar"

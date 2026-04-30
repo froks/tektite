@@ -19,6 +19,7 @@ const emit = defineEmits<{
   fileSelected: [path: string]
   fileSelectedNewTab: [path: string]
   fileRenamed: [oldPath: string, newPath: string]
+  fileMoved: [oldPath: string, newPath: string]
   folderOpened: [path: string]
   folderClosed: []
   toggleCollapse: []
@@ -251,6 +252,25 @@ function handleRenameRequest(p: { entry: FileEntry; newName: string }) {
   renameEntry(p.entry, p.newName)
 }
 
+async function handleMoveRequest(p: { sourcePath: string; targetDir: string }) {
+  const { sourcePath, targetDir } = p
+  const sep = sourcePath.includes('\\') ? '\\' : '/'
+  const name = sourcePath.split(/[\\/]/).pop()!
+  const newPath = `${targetDir}${sep}${name}`
+  const oldParent = fsParent(sourcePath)
+  try {
+    await invoke('rename_file', { oldPath: sourcePath, newPath })
+    // Reload source parent and target directory
+    await reloadDir(oldParent || rootPath.value!)
+    if (childrenMap.value.has(targetDir) || targetDir === rootPath.value) {
+      await reloadDir(targetDir)
+    }
+    emit('fileMoved', sourcePath, newPath)
+  } catch (e) {
+    alert(String(e))
+  }
+}
+
 // ── New item dialog ───────────────────────────────────────────────────────────
 const newItemDialog = ref<{ mode: 'file' | 'folder'; targetDir: string } | null>(null)
 const newItemName = ref('')
@@ -353,7 +373,7 @@ const folderName = computed(() => {
     </div>
 
     <template v-else>
-      <div class="file-tree" @contextmenu.self="showSidebarContextMenu">
+      <div class="file-tree" @contextmenu.self="showSidebarContextMenu" @dragover.prevent @drop.prevent>
         <div v-if="filterResult && displayFiles.length === 0" class="filter-empty">
           No matches
         </div>
@@ -371,6 +391,7 @@ const folderName = computed(() => {
           @rename-request="handleRenameRequest"
           @new-file-request="(dir: string) => openNewItemDialog('file', dir)"
           @new-folder-request="(dir: string) => openNewItemDialog('folder', dir)"
+          @move-request="handleMoveRequest"
         />
       </div>
 

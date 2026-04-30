@@ -1,3 +1,10 @@
+<script lang="ts">
+// Module-level (shared across all FileTreeNode instances) drag state.
+// This is necessary because dragover fires on a *different* instance than dragstart,
+// so per-instance state would always be null on the drop target.
+let draggedPath: string | null = null
+</script>
+
 <script setup lang="ts">
 import { computed, ref, nextTick } from 'vue'
 import { revealItemInDir } from '@tauri-apps/plugin-opener'
@@ -23,6 +30,7 @@ const emit = defineEmits<{
   renameRequest: [payload: { entry: FileEntry; newName: string }]
   newFileRequest: [dir: string]
   newFolderRequest: [dir: string]
+  moveRequest: [payload: { sourcePath: string; targetDir: string }]
 }>()
 
 const isExpanded = computed(() => props.expandedDirs.has(props.entry.path))
@@ -154,6 +162,56 @@ function contextNewFolder() {
   emit('newFolderRequest', targetDir.value)
 }
 
+// ── Drag and drop ─────────────────────────────────────────────────────────────
+const isDragOver = ref(false)
+
+function handleDragStart(e: DragEvent) {
+  if (!e.dataTransfer) return
+  e.dataTransfer.effectAllowed = 'move'
+  e.dataTransfer.setData('text/plain', props.entry.path)
+  draggedPath = props.entry.path
+  console.log('[drag] START', props.entry.path)
+}
+
+function handleDragEnd() {
+  console.log('[drag] END')
+  draggedPath = null
+  isDragOver.value = false
+}
+
+function handleDragOver(e: DragEvent) {
+  console.log('[drag] OVER', props.entry.name, 'is_dir:', props.entry.is_dir, 'draggedPath:', draggedPath)
+  if (!props.entry.is_dir) return
+  const sourcePath = draggedPath
+  if (!sourcePath) return
+  if (sourcePath === props.entry.path || props.entry.path.startsWith(sourcePath + '/') || props.entry.path.startsWith(sourcePath + '\\')) return
+  e.preventDefault()
+  e.stopPropagation()
+  if (e.dataTransfer) e.dataTransfer.dropEffect = 'move'
+  isDragOver.value = true
+}
+
+function handleDragLeave(e: DragEvent) {
+  if (!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node)) {
+    isDragOver.value = false
+  }
+}
+
+function handleDrop(e: DragEvent) {
+  console.log('[drag] DROP on', props.entry.name, 'draggedPath:', draggedPath)
+  isDragOver.value = false
+  if (!props.entry.is_dir) return
+  e.preventDefault()
+  e.stopPropagation()
+  const sourcePath = draggedPath ?? e.dataTransfer?.getData('text/plain')
+  draggedPath = null
+  if (!sourcePath) return
+  if (sourcePath === props.entry.path) return
+  if (props.entry.path.startsWith(sourcePath + '/') || props.entry.path.startsWith(sourcePath + '\\')) return
+  console.log('[drag] MOVE', sourcePath, '->', props.entry.path)
+  emit('moveRequest', { sourcePath, targetDir: props.entry.path })
+}
+
 defineExpose({ startRename })
 </script>
 
@@ -164,8 +222,15 @@ defineExpose({ startRename })
       :class="{
         'tree-row--active': !entry.is_dir && entry.path === activeFile,
         'tree-row--dir': entry.is_dir,
+        'tree-row--drag-over': isDragOver,
       }"
       :style="{ paddingLeft: `${8 + depth * 14}px` }"
+      draggable="true"
+      @dragstart="handleDragStart"
+      @dragend="handleDragEnd"
+      @dragover="handleDragOver"
+      @dragleave="handleDragLeave"
+      @drop="handleDrop"
       @click="handleClick"
       @auxclick="handleAuxClick"
       @contextmenu="showContextMenu"
@@ -251,6 +316,7 @@ defineExpose({ startRename })
         @rename-request="emit('renameRequest', $event)"
         @new-file-request="emit('newFileRequest', $event)"
         @new-folder-request="emit('newFolderRequest', $event)"
+        @move-request="emit('moveRequest', $event)"
       />
     </div>
   </div>
@@ -334,6 +400,22 @@ defineExpose({ startRename })
   padding: 0 4px;
   height: 20px;
   outline: none;
+}
+
+.tree-row--drag-over {
+  background: var(--accent) !important;
+  color: #fff !important;
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.tree-row[draggable='true'] {
+  cursor: grab;
+  -webkit-user-drag: element;
+}
+
+.tree-row[draggable='true']:active {
+  cursor: grabbing;
 }
 
 .ctx-menu {
