@@ -12,11 +12,14 @@ const pdfRef = ref<InstanceType<typeof PdfViewer> | null>(null)
 
 // ── File type helper ──────────────────────────────────────────────────────────
 const IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif', '.svg']
+const CODE_EXTS = ['.ps1', '.sh', '.bat', '.cmd']
 
-function fileType(path: string | null): 'markdown' | 'pdf' | 'text' | 'image' | null {
+function fileType(path: string | null): 'markdown' | 'pdf' | 'text' | 'image' | 'rst' | 'code' | null {
   if (!path) return null
   if (path.endsWith('.pdf')) return 'pdf'
   if (path.endsWith('.txt')) return 'text'
+  if (path.endsWith('.rst')) return 'rst'
+  if (CODE_EXTS.some(ext => path.endsWith(ext))) return 'code'
   if (IMAGE_EXTS.some(ext => path.endsWith(ext))) return 'image'
   return 'markdown'
 }
@@ -341,7 +344,7 @@ const saveStatus = computed(() => {
       </div>
 
       <MarkdownEditor
-        v-if="activeFileType === 'markdown' || activeFileType === 'text'"
+        v-if="activeFileType === 'markdown' || activeFileType === 'text' || activeFileType === 'rst' || activeFileType === 'code'"
         ref="editorRef"
         :content="fileContent"
         :file-path="activeFile"

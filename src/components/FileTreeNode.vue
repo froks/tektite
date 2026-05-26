@@ -53,7 +53,7 @@ async function startRename() {
   // Strip .md for display
   renameValue.value = props.entry.is_dir
     ? props.entry.name
-    : props.entry.name.replace(/\.(md|pdf|txt|jpg|jpeg|png|gif|webp|avif|svg)$/, '')
+    : props.entry.name.replace(/\.(md|pdf|txt|rst|jpg|jpeg|png|gif|webp|avif|svg)$/, '')
   isRenaming.value = true
   await nextTick()
   renameInput.value?.focus()
@@ -64,12 +64,12 @@ function commitRename() {
   if (!isRenaming.value) return
   isRenaming.value = false
   const raw = renameValue.value.trim()
-  if (!raw || raw === props.entry.name.replace(/\.(md|pdf|txt|jpg|jpeg|png|gif|webp|avif|svg)$/, '')) return
-  const extMatch = props.entry.name.match(/\.(md|pdf|txt|jpg|jpeg|png|gif|webp|avif|svg)$/)
+  if (!raw || raw === props.entry.name.replace(/\.(md|pdf|txt|rst|jpg|jpeg|png|gif|webp|avif|svg)$/, '')) return
+  const extMatch = props.entry.name.match(/\.(md|pdf|txt|rst|jpg|jpeg|png|gif|webp|avif|svg)$/)
   const ext = extMatch ? extMatch[0] : ''
   const newName = props.entry.is_dir
     ? raw
-    : (raw.match(/\.(md|pdf|txt|jpg|jpeg|png|gif|webp|avif|svg)$/) ? raw : `${raw}${ext}`)
+    : (raw.match(/\.(md|pdf|txt|rst|jpg|jpeg|png|gif|webp|avif|svg)$/) ? raw : `${raw}${ext}`)
   emit('renameRequest', { entry: props.entry, newName })
 }
 
@@ -274,7 +274,7 @@ defineExpose({ startRename })
         @click.stop
         @mousedown.stop
       />
-      <span v-else class="entry-name">{{ entry.name.replace(/\.(md|pdf|txt|jpg|jpeg|png|gif|webp|avif|svg)$/, '') }}</span>
+      <span v-else class="entry-name">{{ entry.name.replace(/\.(md|pdf|txt|rst|jpg|jpeg|png|gif|webp|avif|svg)$/, '') }}</span>
     </div>
 
     <!-- Context menu -->

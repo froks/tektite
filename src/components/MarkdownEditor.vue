@@ -5,9 +5,13 @@ import { EditorState, StateEffect, StateField, RangeSetBuilder } from '@codemirr
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { languages } from '@codemirror/language-data'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
-import { HighlightStyle, LanguageDescription, syntaxHighlighting } from '@codemirror/language'
+import { HighlightStyle, LanguageDescription, StreamLanguage, syntaxHighlighting } from '@codemirror/language'
 import { tags as t } from '@lezer/highlight'
 import { php } from '@codemirror/lang-php'
+import { powerShell } from '@codemirror/legacy-modes/mode/powershell'
+import { shell } from '@codemirror/legacy-modes/mode/shell'
+import { rstSupport } from '../editor/rstMode'
+import { batParser } from '../editor/batMode'
 import { createMarkdownDecorations } from '../editor/markdownDecorations'
 import SearchPanel from './SearchPanel.vue'
 
@@ -179,6 +183,7 @@ const markdownDecorations = createMarkdownDecorations({
   currentFilePath: () => props.filePath ?? '',
   rootPath: () => props.rootPath,
   onNavigate: (path) => emit('navigate', path),
+  getView: () => view,
 })
 
 const editorTheme = EditorView.theme({
@@ -477,7 +482,20 @@ const codeHighlightStyle = HighlightStyle.define([
   { tag: t.atom,                  color: '#fab387' },
 ])
 
+function languageExtensionsFor(path: string | null) {
+  if (path?.endsWith('.rst')) return [rstSupport]
+  if (path?.endsWith('.ps1')) return [StreamLanguage.define(powerShell), syntaxHighlighting(codeHighlightStyle)]
+  if (path?.endsWith('.sh')) return [StreamLanguage.define(shell), syntaxHighlighting(codeHighlightStyle)]
+  if (path?.endsWith('.bat') || path?.endsWith('.cmd')) return [StreamLanguage.define(batParser), syntaxHighlighting(codeHighlightStyle)]
+  return [
+    markdown({ base: markdownLanguage, codeLanguages }),
+    syntaxHighlighting(codeHighlightStyle),
+    markdownDecorations,
+  ]
+}
+
 function createState(content: string) {
+  const languageExtensions = languageExtensionsFor(props.filePath)
   return EditorState.create({
     doc: content,
     extensions: [
@@ -485,9 +503,7 @@ function createState(content: string) {
       drawSelection(),
       dropCursor(),
       highlightActiveLine(),
-      markdown({ base: markdownLanguage, codeLanguages }),
-      syntaxHighlighting(codeHighlightStyle),
-      markdownDecorations,
+      ...languageExtensions,
       searchHighlightField,
       EditorView.lineWrapping,
       keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
@@ -616,5 +632,85 @@ watch(
   justify-content: center;
   color: var(--text-muted);
   font-size: 14px;
+}
+</style>
+
+<style>
+/* ── PlantUML diagram widget ── */
+.md-plantuml-widget {
+  position: relative;
+  display: inline-block;
+  margin: 8px 0;
+  max-width: 100%;
+}
+
+.md-plantuml-widget .md-plantuml-svg {
+  display: block;
+  max-width: 100%;
+}
+
+.md-plantuml-widget .md-plantuml-svg svg {
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+
+.md-plantuml-widget .md-plantuml-img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+.md-plantuml-widget .md-plantuml-ascii {
+  font-family: monospace;
+  font-size: 13px;
+  line-height: 1.4;
+  background: var(--code-bg, #f6f8fa);
+  color: var(--code-text, inherit);
+  padding: 12px 16px;
+  border-radius: 6px;
+  overflow-x: auto;
+  margin: 0;
+}
+
+.md-plantuml-widget .md-plantuml-loading {
+  font-size: 13px;
+  color: var(--text-muted, #888);
+  padding: 8px 0;
+}
+
+.md-plantuml-widget .md-plantuml-error {
+  font-size: 13px;
+  color: var(--error, #c0392b);
+  padding: 8px 0;
+  white-space: pre-wrap;
+}
+
+.md-plantuml-edit-btn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 5px;
+  background: var(--toolbar-bg, rgba(0,0,0,0.06));
+  color: var(--text-muted, #888);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.md-plantuml-widget:hover .md-plantuml-edit-btn {
+  opacity: 1;
+}
+
+.md-plantuml-edit-btn:hover {
+  background: var(--toolbar-hover-bg, rgba(0,0,0,0.12));
+  color: var(--text, inherit);
 }
 </style>

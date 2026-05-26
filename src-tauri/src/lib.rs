@@ -20,6 +20,143 @@ struct FsChangeEvent {
 
 struct WatcherState(Mutex<Option<notify::RecommendedWatcher>>);
 
+// ─── PlantUML rendering ───────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+struct PlantUmlOptions {
+    /// Output format passed to PlantUML via -t<format>.
+    /// Supported values: "svg" (default), "png", "eps", "txt", "latex", "pdf", …
+    format: Option<String>,
+}
+
+#[tauri::command]
+fn render_plantuml(
+    source: String,
+    options: Option<PlantUmlOptions>,
+    app_handle: tauri::AppHandle,
+) -> Result<String, String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    use tauri::Manager;
+
+    let format = options
+        .and_then(|o| o.format)
+        .unwrap_or_else(|| "svg".to_string());
+
+    let resource_dir = app_handle
+        .path()
+        .resource_dir()
+        .map_err(|e| format!("Cannot resolve resource dir: {e}"))?;
+
+    // Tauri on Windows sometimes returns an extended-length path (\\?\C:\...).
+    // Java cannot handle that prefix in -jar arguments, so strip it if present.
+    let resource_dir = {
+        let s = resource_dir.to_string_lossy();
+        if let Some(stripped) = s.strip_prefix(r"\\?\") {
+            std::path::PathBuf::from(stripped.to_string())
+        } else {
+            resource_dir
+        }
+    };
+
+    // In dev mode resource_dir is src-tauri/ and resources are under resources/.
+    // In production the resources are extracted directly into resource_dir (no extra subfolder).
+    let jar_path = {
+        let candidate_dev  = resource_dir.join("resources").join("plantuml.jar");
+        let candidate_prod = resource_dir.join("plantuml.jar");
+        if candidate_dev.exists() {
+            candidate_dev
+        } else if candidate_prod.exists() {
+            candidate_prod
+        } else {
+            return Err(format!(
+                "plantuml.jar not found (tried {} and {})",
+                candidate_dev.display(),
+                candidate_prod.display(),
+            ));
+        }
+    };
+
+    // Pick JRE binary for the current platform
+    let jre_dir = match std::env::consts::OS {
+        "linux"   => resource_dir.join("resources").join("jre-linux"),
+        "macos"   => resource_dir.join("resources").join("jre-macos"),
+        "windows" => resource_dir.join("resources").join("jre-windows"),
+        other     => return Err(format!("Unsupported OS: {other}")),
+    };
+
+    let java_bin = if std::env::consts::OS == "windows" {
+        jre_dir.join("bin").join("java.exe")
+    } else {
+        jre_dir.join("bin").join("java")
+    };
+
+    // Fall back to system java if bundled JRE is not present yet (dev mode)
+    let java_cmd = if java_bin.exists() {
+        java_bin.to_string_lossy().into_owned()
+    } else {
+        "java".to_string()
+    };
+
+    let flag = format!("-t{format}");
+
+    let mut child = Command::new(&java_cmd)
+        .args([
+            "-Djava.awt.headless=true",
+            "-jar",
+            &jar_path.to_string_lossy(),
+            &flag,
+            "-pipe",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("Failed to launch Java ({java_cmd}): {e}"))?;
+
+    // Write source to stdin then close it so PlantUML knows input is complete
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(source.as_bytes())
+            .map_err(|e| format!("Failed to write to PlantUML stdin: {e}"))?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("Failed to wait for PlantUML: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "PlantUML exited with {}: {stderr}",
+            output.status
+        ));
+    }
+
+    if output.stdout.is_empty() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("PlantUML produced no output. stderr: {stderr}"));
+    }
+
+    // Always return base64-encoded bytes regardless of format
+    Ok(base64_encode(&output.stdout))
+}
+
+fn base64_encode(data: &[u8]) -> String {
+    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(data.len().div_ceil(3) * 4);
+    for chunk in data.chunks(3) {
+        let b0 = chunk[0] as usize;
+        let b1 = if chunk.len() > 1 { chunk[1] as usize } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as usize } else { 0 };
+        out.push(TABLE[b0 >> 2] as char);
+        out.push(TABLE[((b0 & 3) << 4) | (b1 >> 4)] as char);
+        if chunk.len() > 1 { out.push(TABLE[((b1 & 0xf) << 2) | (b2 >> 6)] as char); } else { out.push('='); }
+        if chunk.len() > 2 { out.push(TABLE[b2 & 0x3f] as char); } else { out.push('='); }
+    }
+    out
+}
+
 #[tauri::command]
 fn read_file(path: String) -> Result<String, String> {
     fs::read_to_string(&path).map_err(|e| e.to_string())
@@ -31,19 +168,7 @@ fn read_file_base64(path: String) -> Result<String, String> {
     let mut file = fs::File::open(&path).map_err(|e| e.to_string())?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-    // Encode to base64 using the standard alphabet
-    const TABLE: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let b0 = chunk[0] as usize;
-        let b1 = if chunk.len() > 1 { chunk[1] as usize } else { 0 };
-        let b2 = if chunk.len() > 2 { chunk[2] as usize } else { 0 };
-        out.push(TABLE[b0 >> 2] as char);
-        out.push(TABLE[((b0 & 3) << 4) | (b1 >> 4)] as char);
-        if chunk.len() > 1 { out.push(TABLE[((b1 & 0xf) << 2) | (b2 >> 6)] as char); } else { out.push('='); }
-        if chunk.len() > 2 { out.push(TABLE[b2 & 0x3f] as char); } else { out.push('='); }
-    }
-    Ok(out)
+    Ok(base64_encode(&bytes))
 }
 
 #[tauri::command]
@@ -73,8 +198,10 @@ fn list_directory(path: String) -> Result<Vec<FileEntry>, String> {
             || name.ends_with(".png") || name.ends_with(".gif")
             || name.ends_with(".webp") || name.ends_with(".avif")
             || name.ends_with(".svg");
+        let is_code = name.ends_with(".ps1") || name.ends_with(".sh")
+            || name.ends_with(".bat") || name.ends_with(".cmd");
         if !is_dir && !name.ends_with(".md") && !name.ends_with(".pdf")
-            && !name.ends_with(".txt") && !is_image {
+            && !name.ends_with(".txt") && !name.ends_with(".rst") && !is_code && !is_image {
             continue;
         }
 
@@ -257,6 +384,7 @@ pub fn run() {
             file_exists,
             get_initial_folder,
             set_last_folder,
+            render_plantuml,
             start_watching,
             stop_watching,
         ])
