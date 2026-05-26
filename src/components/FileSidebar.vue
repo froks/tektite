@@ -66,7 +66,7 @@ function handleFsChange(event: { payload: { kind: string; paths: string[] } }) {
     if (parent === rootPath.value || childrenMap.value.has(parent)) {
       scheduleReload(parent)
     }
-    if (kind === 'modified' && (path.endsWith('.md') || path.endsWith('.txt'))) {
+    if (kind === 'modified' && /\.(md|txt|rst|ps1|sh|bat|cmd)$/.test(path)) {
       scheduleContentReload(path)
     }
   }
@@ -177,7 +177,7 @@ function buildFilteredTree(entries: FileEntry[], lower: string, outMap: Map<stri
         }
       }
     } else {
-      if (entry.name.replace(/\.(md|pdf|txt|jpg|jpeg|png|gif|webp|avif|svg)$/, '').toLowerCase().includes(lower)) {
+      if (entry.name.replace(/\.(md|pdf|txt|rst|jpg|jpeg|png|gif|webp|avif|svg)$/, '').toLowerCase().includes(lower)) {
         result.push(entry)
       }
     }
@@ -254,7 +254,15 @@ function handleRenameRequest(p: { entry: FileEntry; newName: string }) {
 // ── New item dialog ───────────────────────────────────────────────────────────
 const newItemDialog = ref<{ mode: 'file' | 'folder'; targetDir: string } | null>(null)
 const newItemName = ref('')
+const newItemExt = ref('md')
 const newItemInput = ref<HTMLInputElement | null>(null)
+
+// Extension the user typed directly into the name (e.g. "notes.rst" → "rst"),
+// which overrides the file-type selector.
+const typedExtension = computed(() => {
+  const m = newItemName.value.trim().match(/\.([A-Za-z0-9]+)$/)
+  return m ? m[1] : null
+})
 
 async function reloadDir(dir: string) {
   if (dir === rootPath.value) {
@@ -266,6 +274,7 @@ async function reloadDir(dir: string) {
 
 async function openNewItemDialog(mode: 'file' | 'folder', targetDir: string) {
   newItemName.value = ''
+  newItemExt.value = 'md'
   newItemDialog.value = { mode, targetDir }
   await nextTick()
   newItemInput.value?.focus()
@@ -281,7 +290,8 @@ async function confirmNewItem() {
   if (!name || !dialog) return
   newItemDialog.value = null
   if (dialog.mode === 'file') {
-    const path = `${dialog.targetDir}/${name}.md`
+    const fileName = typedExtension.value ? name : `${name}.${newItemExt.value}`
+    const path = `${dialog.targetDir}/${fileName}`
     try {
       await invoke('create_file', { path })
       await reloadDir(dialog.targetDir)
@@ -407,7 +417,18 @@ const folderName = computed(() => {
           @keydown.enter.prevent="confirmNewItem"
           @keydown.escape.prevent="cancelNewItem"
         />
-        <div class="dialog-hint" v-if="newItemDialog.mode === 'file'">.md will be appended automatically</div>
+        <select
+          v-if="newItemDialog.mode === 'file' && !typedExtension"
+          v-model="newItemExt"
+          class="dialog-select"
+        >
+          <option value="md">Markdown (.md)</option>
+          <option value="rst">reStructuredText (.rst)</option>
+          <option value="txt">Text (.txt)</option>
+        </select>
+        <div class="dialog-hint" v-if="newItemDialog.mode === 'file'">
+          {{ typedExtension ? `Using .${typedExtension}` : `.${newItemExt} will be appended (or type your own extension)` }}
+        </div>
         <div class="dialog-actions">
           <button class="dialog-btn dialog-btn--cancel" @click="cancelNewItem">Cancel</button>
           <button class="dialog-btn dialog-btn--confirm" :disabled="!newItemName.trim()" @click="confirmNewItem">Create</button>
@@ -615,6 +636,24 @@ const folderName = computed(() => {
 
 .dialog-input::placeholder {
   color: var(--text-muted);
+}
+
+.dialog-select {
+  width: 100%;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 7px 10px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text);
+  outline: none;
+  cursor: pointer;
+  transition: border-color 0.15s;
+}
+
+.dialog-select:focus {
+  border-color: var(--accent);
 }
 
 .dialog-hint {

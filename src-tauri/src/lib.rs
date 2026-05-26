@@ -198,8 +198,10 @@ fn list_directory(path: String) -> Result<Vec<FileEntry>, String> {
             || name.ends_with(".png") || name.ends_with(".gif")
             || name.ends_with(".webp") || name.ends_with(".avif")
             || name.ends_with(".svg");
+        let is_code = name.ends_with(".ps1") || name.ends_with(".sh")
+            || name.ends_with(".bat") || name.ends_with(".cmd");
         if !is_dir && !name.ends_with(".md") && !name.ends_with(".pdf")
-            && !name.ends_with(".txt") && !is_image {
+            && !name.ends_with(".txt") && !name.ends_with(".rst") && !is_code && !is_image {
             continue;
         }
 

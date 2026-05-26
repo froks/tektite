@@ -5,9 +5,13 @@ import { EditorState, StateEffect, StateField, RangeSetBuilder } from '@codemirr
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown'
 import { languages } from '@codemirror/language-data'
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
-import { HighlightStyle, LanguageDescription, syntaxHighlighting } from '@codemirror/language'
+import { HighlightStyle, LanguageDescription, StreamLanguage, syntaxHighlighting } from '@codemirror/language'
 import { tags as t } from '@lezer/highlight'
 import { php } from '@codemirror/lang-php'
+import { powerShell } from '@codemirror/legacy-modes/mode/powershell'
+import { shell } from '@codemirror/legacy-modes/mode/shell'
+import { rstSupport } from '../editor/rstMode'
+import { batParser } from '../editor/batMode'
 import { createMarkdownDecorations } from '../editor/markdownDecorations'
 import SearchPanel from './SearchPanel.vue'
 
@@ -478,7 +482,20 @@ const codeHighlightStyle = HighlightStyle.define([
   { tag: t.atom,                  color: '#fab387' },
 ])
 
+function languageExtensionsFor(path: string | null) {
+  if (path?.endsWith('.rst')) return [rstSupport]
+  if (path?.endsWith('.ps1')) return [StreamLanguage.define(powerShell), syntaxHighlighting(codeHighlightStyle)]
+  if (path?.endsWith('.sh')) return [StreamLanguage.define(shell), syntaxHighlighting(codeHighlightStyle)]
+  if (path?.endsWith('.bat') || path?.endsWith('.cmd')) return [StreamLanguage.define(batParser), syntaxHighlighting(codeHighlightStyle)]
+  return [
+    markdown({ base: markdownLanguage, codeLanguages }),
+    syntaxHighlighting(codeHighlightStyle),
+    markdownDecorations,
+  ]
+}
+
 function createState(content: string) {
+  const languageExtensions = languageExtensionsFor(props.filePath)
   return EditorState.create({
     doc: content,
     extensions: [
@@ -486,9 +503,7 @@ function createState(content: string) {
       drawSelection(),
       dropCursor(),
       highlightActiveLine(),
-      markdown({ base: markdownLanguage, codeLanguages }),
-      syntaxHighlighting(codeHighlightStyle),
-      markdownDecorations,
+      ...languageExtensions,
       searchHighlightField,
       EditorView.lineWrapping,
       keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab]),
